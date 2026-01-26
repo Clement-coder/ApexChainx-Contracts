@@ -19,14 +19,54 @@ pub struct SLAConfig {
 
 #[contractimpl]
 impl SLACalculatorContract {
-    pub fn initialize(env: Env, admin: Address) {
-        if env.storage().instance().has(&ADMIN_KEY) {
-            panic!("Already initialized");
-        }
-
-        env.storage().instance().set(&ADMIN_KEY, &admin);
-        env.storage().instance().set(&CONFIG_KEY, &Map::<Symbol, SLAConfig>::new(&env));
+   pub fn initialize(env: Env, admin: Address) {
+    if env.storage().instance().has(&ADMIN_KEY) {
+        panic!("Already initialized");
     }
+
+    env.storage().instance().set(&ADMIN_KEY, &admin);
+
+    let mut configs = Map::<Symbol, SLAConfig>::new(&env);
+
+    
+    configs.set(
+        symbol_short!("critical"),
+        SLAConfig {
+            threshold_minutes: 15,
+            penalty_per_minute: 100,
+            reward_base: 750,
+        },
+    );
+
+    configs.set(
+        symbol_short!("high"),
+        SLAConfig {
+            threshold_minutes: 30,
+            penalty_per_minute: 50,
+            reward_base: 750,
+        },
+    );
+
+    configs.set(
+        symbol_short!("medium"),
+        SLAConfig {
+            threshold_minutes: 60,
+            penalty_per_minute: 25,
+            reward_base: 750,
+        },
+    );
+
+    configs.set(
+        symbol_short!("low"),
+        SLAConfig {
+            threshold_minutes: 120,
+            penalty_per_minute: 10,
+            reward_base: 600,
+        },
+    );
+
+    env.storage().instance().set(&CONFIG_KEY, &configs);
+}
 
     pub fn get_admin(env: Env) -> Address {
         env.storage()
