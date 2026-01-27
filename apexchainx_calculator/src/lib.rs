@@ -17,6 +17,18 @@ pub struct SLAConfig {
     pub reward_base: i128,
 }
 
+#[derive(Clone)]
+pub struct SLAResult {
+    pub outage_id: Symbol,
+    pub status: Symbol,       // "met" or "violated"
+    pub mttr_minutes: u32,
+    pub threshold_minutes: u32,
+    pub amount: i128,         // negative = penalty, positive = reward
+    pub payment_type: Symbol, // "reward" or "penalty"
+    pub rating: Symbol,       // "exceptional", "excellent", "good", "poor"
+}
+
+
 #[contractimpl]
 impl SLACalculatorContract {
    pub fn initialize(env: Env, admin: Address) {
@@ -115,4 +127,60 @@ impl SLACalculatorContract {
 
         configs.get(severity).expect("Config not found")
     }
+
+    pub fn calculate_sla(
+    env: Env,
+    outage_id: Symbol,
+    severity: Symbol,
+    mttr_minutes: u32,
+) -> SLAResult {
+    let cfg = Self::get_config(env.clone(), severity.clone());
+
+    let threshold = cfg.threshold_minutes;
+
+    // --------------------
+    // Case 1: SLA violated → penalty
+    // --------------------
+    if mttr_minutes > threshold {
+        let overtime = (mttr_minutes - threshold) as i128;
+        let penalty = overtime * cfg.penalty_per_minute;
+
+        return SLAResult {
+            outage_id,
+            status: symbol_short!("violated"),
+            mttr_minutes,
+            threshold_minutes: threshold,
+            amount: -penalty,
+            payment_type: symbol_short!("penalty"),
+            rating: symbol_short!("poor"),
+        };
+    }
+
+        // --------------------
+    // Case 2: SLA met → reward
+    // --------------------
+    let performance_ratio = (mttr_minutes * 100) / threshold;
+
+    let (multiplier, rating) = if performance_ratio < 50 {
+        (200, symbol_short!("exceptional")) // 2.0x
+    } else if performance_ratio < 75 {
+        (150, symbol_short!("excellent")) // 1.5x
+    } else {
+        (100, symbol_short!("good")) // 1.0x
+    };
+
+    let reward = (cfg.reward_base * (multiplier as i128)) / 100;
+
+    SLAResult {
+        outage_id,
+        status: symbol_short!("met"),
+        mttr_minutes,
+        threshold_minutes: threshold,
+        amount: reward,
+        payment_type: symbol_short!("reward"),
+        rating,
+    }
+}
+
+    
 }
