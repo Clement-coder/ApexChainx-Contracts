@@ -22,6 +22,7 @@ const STATS_KEY:           Symbol = symbol_short!("STATS");    // #29
 const HISTORY_KEY:         Symbol = symbol_short!("HIST");
 const STORAGE_VERSION_KEY: Symbol = symbol_short!("VER");
 const STORAGE_VERSION:     u32    = 1;
+const RESULT_SCHEMA_VERSION: u32  = 1;
 
 // -----------------------------------------------------------------------
 // Events
@@ -32,6 +33,7 @@ const EVENT_PAUSED:   Symbol = symbol_short!("paused");    // #27
 const EVENT_UNPAUSED: Symbol = symbol_short!("unpause");   // #27
 const EVENT_OP_SET:   Symbol = symbol_short!("op_set");    // #28
 const EVENT_PRUNED:   Symbol = symbol_short!("pruned");
+const EVENT_VERSION:  Symbol = symbol_short!("v1");
 
 // -----------------------------------------------------------------------
 // Errors
@@ -83,6 +85,21 @@ pub struct SLAConfigEntry {
 pub struct SLAConfigSnapshot {
     pub version: Symbol,
     pub entries: Vec<SLAConfigEntry>,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SLAResultSchema {
+    pub version: Symbol,
+    pub schema_version: u32,
+    pub status_met: Symbol,
+    pub status_violated: Symbol,
+    pub payment_reward: Symbol,
+    pub payment_penalty: Symbol,
+    pub rating_exceptional: Symbol,
+    pub rating_excellent: Symbol,
+    pub rating_good: Symbol,
+    pub rating_poor: Symbol,
 }
 
 /// #29 – Cumulative on-chain SLA performance metrics.
@@ -165,8 +182,8 @@ impl SLACalculatorContract {
         env.storage().instance().set(&OPERATOR_KEY, &new_operator);
 
         env.events().publish(
-            (EVENT_OP_SET, caller),
-            (new_operator,),
+            (EVENT_OP_SET, EVENT_VERSION, caller),
+            (new_operator.clone(),),
         );
 
         Ok(())
@@ -183,7 +200,7 @@ impl SLACalculatorContract {
         Self::require_admin(&env, &caller)?;
 
         env.storage().instance().set(&PAUSED_KEY, &true);
-        env.events().publish((EVENT_PAUSED, caller), (true,));
+        env.events().publish((EVENT_PAUSED, EVENT_VERSION, caller), (true,));
         Ok(())
     }
 
@@ -194,7 +211,7 @@ impl SLACalculatorContract {
         Self::require_admin(&env, &caller)?;
 
         env.storage().instance().set(&PAUSED_KEY, &false);
-        env.events().publish((EVENT_UNPAUSED, caller), (false,));
+        env.events().publish((EVENT_UNPAUSED, EVENT_VERSION, caller), (false,));
         Ok(())
     }
 
@@ -227,7 +244,7 @@ impl SLACalculatorContract {
         env.storage().instance().set(&CONFIG_KEY, &configs);
 
         env.events().publish(
-            (EVENT_CONFIG_UPD, severity),
+            (EVENT_CONFIG_UPD, EVENT_VERSION, severity),
             (threshold_minutes, penalty_per_minute, reward_base),
         );
         Ok(())
@@ -243,28 +260,45 @@ impl SLACalculatorContract {
         env.storage().instance().get(&CONFIG_KEY).ok_or(SLAError::NotInitialized)
     }
 
+
     /// Returns a deterministic backend-friendly snapshot of all config values.
     pub fn get_config_snapshot(env: Env) -> Result<SLAConfigSnapshot, SLAError> {
-        Self::check_version(&env)?;
+    Self::check_version(&env)?;
 
-        let mut entries = Vec::new(&env);
-        let severities = [
-            symbol_short!("critical"),
-            symbol_short!("high"),
-            symbol_short!("medium"),
-            symbol_short!("low"),
-        ];
+    let mut entries = Vec::new(&env);
+    let severities = [
+        symbol_short!("critical"),
+        symbol_short!("high"),
+        symbol_short!("medium"),
+        symbol_short!("low"),
+    ];
 
-        for severity in severities {
-            let config = Self::load_config(&env, &severity)?;
-            entries.push_back(SLAConfigEntry { severity, config });
-        }
-
-        Ok(SLAConfigSnapshot {
-            version: symbol_short!("v1"),
-            entries,
-        })
+    for severity in severities {
+        let config = Self::load_config(&env, &severity)?;
+        entries.push_back(SLAConfigEntry { severity, config });
     }
+
+    Ok(SLAConfigSnapshot {
+        version: symbol_short!("v1"),
+        entries,
+    })
+}
+
+pub fn get_result_schema(env: Env) -> Result<SLAResultSchema, SLAError> {
+    Self::check_version(&env)?;
+    Ok(SLAResultSchema {
+        version: symbol_short!("v1"),
+        schema_version: RESULT_SCHEMA_VERSION,
+        status_met: symbol_short!("met"),
+        status_violated: symbol_short!("viol"),
+        payment_reward: symbol_short!("rew"),
+        payment_penalty: symbol_short!("pen"),
+        rating_exceptional: symbol_short!("top"),
+        rating_excellent: symbol_short!("excel"),
+        rating_good: symbol_short!("good"),
+        rating_poor: symbol_short!("poor"),
+    })
+}
 
     // -------------------------------------------------------------------
     // #29 – Stats view
@@ -325,20 +359,12 @@ impl SLACalculatorContract {
         if result.status == symbol_short!("viol") {
             // #29 – update stats (pass positive penalty value)
             Self::increment_stats(&env, false, 0, -result.amount);
-
-            env.events().publish(
-                (EVENT_SLA_CALC, severity.clone()),
-                (outage_id.clone(), symbol_short!("viol"), result.amount),
-            );
         } else {
             // #29 – update stats
             Self::increment_stats(&env, true, result.amount, 0);
-
-            env.events().publish(
-                (EVENT_SLA_CALC, severity.clone()),
-                (outage_id.clone(), symbol_short!("met"), result.amount),
-            );
         }
+
+        Self::publish_sla_event(&env, severity, &result);
 
         Ok(result)
     }
@@ -461,6 +487,21 @@ impl SLACalculatorContract {
         env.storage().instance().set(&STATS_KEY, &stats);
     }
 
+    fn publish_sla_event(env: &Env, severity: Symbol, result: &SLAResult) {
+        env.events().publish(
+            (EVENT_SLA_CALC, EVENT_VERSION, severity),
+            (
+                result.outage_id.clone(),
+                result.status.clone(),
+                result.payment_type.clone(),
+                result.rating.clone(),
+                result.mttr_minutes,
+                result.threshold_minutes,
+                result.amount,
+            ),
+        );
+    }
+
     // -------------------------------------------------------------------
     // #33 - History & Compaction (Admin only)
     // -------------------------------------------------------------------
@@ -490,7 +531,7 @@ impl SLACalculatorContract {
             }
             
             env.storage().instance().set(&HISTORY_KEY, &new_history);
-            env.events().publish((EVENT_PRUNED, caller), (remove_count, keep_latest));
+            env.events().publish((EVENT_PRUNED, EVENT_VERSION, caller), (remove_count, keep_latest));
         }
 
         Ok(())

@@ -2,7 +2,8 @@
 
 use super::*;
 use soroban_sdk::testutils::Address as _;
-use soroban_sdk::Env;
+use soroban_sdk::testutils::Events as _;
+use soroban_sdk::{Env, Symbol, TryIntoVal};
 
 // ============================================================
 // Test helpers
@@ -12,6 +13,19 @@ struct Actors {
     admin:    soroban_sdk::Address,
     operator: soroban_sdk::Address,
     stranger: soroban_sdk::Address,
+}
+
+struct GoldenCase<'a> {
+    severity: &'a str,
+    mttr_minutes: u32,
+    expected_status: &'a str,
+    expected_payment_type: &'a str,
+    expected_rating: &'a str,
+    expected_amount: i128,
+}
+
+fn symbol(env: &Env, value: &str) -> Symbol {
+    Symbol::new(env, value)
 }
 
 fn setup() -> (Env, SLACalculatorContractClient<'static>, Actors) {
@@ -81,6 +95,81 @@ fn test_config_snapshot_is_deterministic_and_complete() {
     assert_eq!(medium.config.threshold_minutes, 60);
     assert_eq!(low.severity, symbol_short!("low"));
     assert_eq!(low.config.threshold_minutes, 120);
+}
+
+#[test]
+fn test_result_schema_is_explicit_and_stable() {
+    let (_env, client, _actors) = setup();
+
+    let schema = client.get_result_schema();
+    assert_eq!(schema.version, symbol_short!("v1"));
+    assert_eq!(schema.schema_version, 1);
+    assert_eq!(schema.status_met, symbol_short!("met"));
+    assert_eq!(schema.status_violated, symbol_short!("viol"));
+    assert_eq!(schema.payment_reward, symbol_short!("rew"));
+    assert_eq!(schema.payment_penalty, symbol_short!("pen"));
+    assert_eq!(schema.rating_exceptional, symbol_short!("top"));
+    assert_eq!(schema.rating_excellent, symbol_short!("excel"));
+    assert_eq!(schema.rating_good, symbol_short!("good"));
+    assert_eq!(schema.rating_poor, symbol_short!("poor"));
+}
+
+#[test]
+fn test_calculate_sla_emits_versioned_integration_event() {
+    let (env, client, actors) = setup();
+
+    client.calculate_sla(
+        &actors.operator,
+        &symbol_short!("EVT001"),
+        &symbol_short!("critical"),
+        &5,
+    );
+
+    let events = env.events().all();
+    let (_, topics, data) = events.last().unwrap();
+
+    let topic_0: Symbol = topics.get(0).unwrap().try_into_val(&env).unwrap();
+    let topic_1: Symbol = topics.get(1).unwrap().try_into_val(&env).unwrap();
+    let topic_2: Symbol = topics.get(2).unwrap().try_into_val(&env).unwrap();
+    let event_data: (Symbol, Symbol, Symbol, Symbol, u32, u32, i128) = data
+        .try_into_val(&env)
+        .unwrap();
+
+    assert_eq!(topic_0, EVENT_SLA_CALC);
+    assert_eq!(topic_1, EVENT_VERSION);
+    assert_eq!(topic_2, symbol_short!("critical"));
+    assert_eq!(
+        event_data,
+        (
+            symbol_short!("EVT001"),
+            symbol_short!("met"),
+            symbol_short!("rew"),
+            symbol_short!("top"),
+            5u32,
+            15u32,
+            1500i128,
+        ),
+    );
+}
+
+#[test]
+fn test_set_config_emits_versioned_config_event() {
+    let (env, client, actors) = setup();
+
+    client.set_config(&actors.admin, &symbol_short!("critical"), &20, &200, &1000);
+
+    let events = env.events().all();
+    let (_, topics, data) = events.last().unwrap();
+
+    let topic_0: Symbol = topics.get(0).unwrap().try_into_val(&env).unwrap();
+    let topic_1: Symbol = topics.get(1).unwrap().try_into_val(&env).unwrap();
+    let topic_2: Symbol = topics.get(2).unwrap().try_into_val(&env).unwrap();
+    let event_data: (u32, i128, i128) = data.try_into_val(&env).unwrap();
+
+    assert_eq!(topic_0, EVENT_CONFIG_UPD);
+    assert_eq!(topic_1, EVENT_VERSION);
+    assert_eq!(topic_2, symbol_short!("critical"));
+    assert_eq!(event_data, (20u32, 200i128, 1000i128));
 }
 
 // ============================================================
@@ -339,6 +428,154 @@ fn test_sla_met_top_rating() {
     assert_eq!(result.payment_type, symbol_short!("rew"));
     assert_eq!(result.rating,       symbol_short!("top"));
     assert_eq!(result.amount,       1500); // 750 * 200 / 100
+}
+
+#[test]
+fn test_backend_parity_threshold_boundary_cases() {
+    let (env, client, actors) = setup();
+    let cases = [
+        GoldenCase {
+            severity: "critical",
+            mttr_minutes: 15,
+            expected_status: "met",
+            expected_payment_type: "rew",
+            expected_rating: "good",
+            expected_amount: 750,
+        },
+        GoldenCase {
+            severity: "critical",
+            mttr_minutes: 16,
+            expected_status: "viol",
+            expected_payment_type: "pen",
+            expected_rating: "poor",
+            expected_amount: -100,
+        },
+        GoldenCase {
+            severity: "high",
+            mttr_minutes: 30,
+            expected_status: "met",
+            expected_payment_type: "rew",
+            expected_rating: "good",
+            expected_amount: 750,
+        },
+        GoldenCase {
+            severity: "high",
+            mttr_minutes: 31,
+            expected_status: "viol",
+            expected_payment_type: "pen",
+            expected_rating: "poor",
+            expected_amount: -50,
+        },
+        GoldenCase {
+            severity: "medium",
+            mttr_minutes: 60,
+            expected_status: "met",
+            expected_payment_type: "rew",
+            expected_rating: "good",
+            expected_amount: 750,
+        },
+        GoldenCase {
+            severity: "medium",
+            mttr_minutes: 61,
+            expected_status: "viol",
+            expected_payment_type: "pen",
+            expected_rating: "poor",
+            expected_amount: -25,
+        },
+        GoldenCase {
+            severity: "low",
+            mttr_minutes: 120,
+            expected_status: "met",
+            expected_payment_type: "rew",
+            expected_rating: "good",
+            expected_amount: 600,
+        },
+        GoldenCase {
+            severity: "low",
+            mttr_minutes: 121,
+            expected_status: "viol",
+            expected_payment_type: "pen",
+            expected_rating: "poor",
+            expected_amount: -10,
+        },
+    ];
+
+    for case in cases {
+        let outage_id = symbol(&env, "PARITY_B");
+        let severity = symbol(&env, case.severity);
+        let result = client.calculate_sla(&actors.operator, &outage_id, &severity, &case.mttr_minutes);
+
+        assert_eq!(result.status, symbol(&env, case.expected_status));
+        assert_eq!(result.payment_type, symbol(&env, case.expected_payment_type));
+        assert_eq!(result.rating, symbol(&env, case.expected_rating));
+        assert_eq!(result.amount, case.expected_amount);
+    }
+}
+
+#[test]
+fn test_backend_parity_reward_tier_cases() {
+    let (env, client, actors) = setup();
+    let cases = [
+        GoldenCase {
+            severity: "critical",
+            mttr_minutes: 7,
+            expected_status: "met",
+            expected_payment_type: "rew",
+            expected_rating: "top",
+            expected_amount: 1500,
+        },
+        GoldenCase {
+            severity: "critical",
+            mttr_minutes: 10,
+            expected_status: "met",
+            expected_payment_type: "rew",
+            expected_rating: "excel",
+            expected_amount: 1125,
+        },
+        GoldenCase {
+            severity: "critical",
+            mttr_minutes: 15,
+            expected_status: "met",
+            expected_payment_type: "rew",
+            expected_rating: "good",
+            expected_amount: 750,
+        },
+        GoldenCase {
+            severity: "low",
+            mttr_minutes: 59,
+            expected_status: "met",
+            expected_payment_type: "rew",
+            expected_rating: "top",
+            expected_amount: 1200,
+        },
+        GoldenCase {
+            severity: "low",
+            mttr_minutes: 89,
+            expected_status: "met",
+            expected_payment_type: "rew",
+            expected_rating: "excel",
+            expected_amount: 900,
+        },
+        GoldenCase {
+            severity: "low",
+            mttr_minutes: 120,
+            expected_status: "met",
+            expected_payment_type: "rew",
+            expected_rating: "good",
+            expected_amount: 600,
+        },
+    ];
+
+    for case in cases {
+        let outage_id = symbol(&env, "PARITY_R");
+        let severity = symbol(&env, case.severity);
+        let result = client.calculate_sla(&actors.operator, &outage_id, &severity, &case.mttr_minutes);
+
+        assert_eq!(result.status, symbol(&env, case.expected_status));
+        assert_eq!(result.payment_type, symbol(&env, case.expected_payment_type));
+        assert_eq!(result.rating, symbol(&env, case.expected_rating));
+        assert_eq!(result.amount, case.expected_amount);
+    }
 }
 
 // ============================================================

@@ -179,6 +179,60 @@ Important:
 
 - contract logic must never diverge from backend expectations
 - API response structure depends on contract output
+- result symbol mappings are versioned through the contract-facing schema
+
+## Backend-Facing Result Schema
+
+The SLA calculator now exposes an explicit result schema contract so the backend
+does not have to infer symbol meanings implicitly.
+
+Current schema version:
+
+- schema label: `v1`
+- schema version: `1`
+
+Current symbol mappings:
+
+- status met -> `met`
+- status violated -> `viol`
+- payment reward -> `rew`
+- payment penalty -> `pen`
+- rating exceptional -> `top`
+- rating excellent -> `excel`
+- rating good -> `good`
+- rating poor -> `poor`
+
+Compatibility rule:
+
+- additive read-only contract helpers are preferred over changing the shape of
+  `SLAResult`
+- changes that alter symbol meanings or add new backend-facing semantics should
+  increment the documented schema version intentionally
+
+## Event Convention
+
+Lifecycle events are versioned so backend consumers can reason about event shape
+without inferring it from position alone.
+
+Current event topic convention:
+
+- topic 0 -> event name
+- topic 1 -> event version
+- topic 2 -> event-specific context such as severity or caller
+
+Current event version:
+
+- `v1`
+
+Current SLA calculation event payload:
+
+- outage id
+- result status
+- payment type
+- rating
+- MTTR minutes
+- threshold minutes
+- amount
 
 ---
 
