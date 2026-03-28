@@ -96,32 +96,7 @@ If those are planned, they are future work rather than part of the present repos
 - Cargo
 - optional: Soroban CLI for deployment workflows
 
-### Run Tests
-
-```bash
-cd apexchainx_calculator
-cargo test
-```
-
-### Build The Contract
-
-```bash
-cd apexchainx_calculator
-cargo build
-```
-
-### Build WASM
-
-```bash
-cd apexchainx_calculator
-cargo build --target wasm32-unknown-unknown --release
-```
-
-Expected artifact:
-
-- `apexchainx_calculator/target/wasm32-unknown-unknown/release/apexchainx_calculator.wasm`
-
-## Deploy-Oriented Workflow
+### Run Tests\n\n```bash\ncd apexchainx_calculator\ncargo test\n```\n\n### Test Vector Artifacts for Backend Parity\n\nRun `cargo test` to generate/update canonical SLA test vectors as JSON snapshots:\n\n```\napexchainx_calculator/test_snapshots/tests/*.json\n```\n\n**Key Vectors**:\n- `test_backend_parity_threshold_boundary_cases.*.json`: SLA met/viol boundaries\n- `test_backend_parity_reward_tier_cases.*.json`: Reward tiers (top/excel/good)\n- `test_stress_1000_calculations_mixed_severities.*.json`: Performance aggregates\n- `test_config_snapshot_is_deterministic_and_complete.*.json`: Full config\n\n**Backend Usage**:\n1. Consume snapshots for parity tests: Input (severity/mttr) → match contract `calculate_sla_view`\n2. Use `get_config_snapshot()` + `get_result_schema()` for schema validation.\n3. Maintenance: `cargo test` after SLA changes → snapshots auto-update.\n\nVectors ensure contract/backend parity without manual duplication.\n\n### Build The Contract\n\n```bash\ncd apexchainx_calculator\ncargo build\n```\n\n### Build WASM\n\n```bash\ncd apexchainx_calculator\ncargo build --target wasm32-unknown-unknown --release\n```\n\nExpected artifact:\n\n- `apexchainx_calculator/target/wasm32-unknown-unknown/release/apexchainx_calculator.wasm`\n\n## Deploy-Oriented Workflow
 
 The current repository does not ship deployment scripts, but the existing crate
 is ready for a manual Soroban deployment flow.

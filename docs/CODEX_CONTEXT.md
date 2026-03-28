@@ -202,14 +202,7 @@ Current symbol mappings:
 - rating good -> `good`
 - rating poor -> `poor`
 
-Compatibility rule:
-
-- additive read-only contract helpers are preferred over changing the shape of
-  `SLAResult`
-- changes that alter symbol meanings or add new backend-facing semantics should
-  increment the documented schema version intentionally
-
-## Event Convention
+Compatibility rule:\n\n- additive read-only contract helpers are preferred over changing the shape of\n  `SLAResult`\n- **Versioning**: Breaking ABI/symbol changes → MAJOR bump (v2.0.0), update `schema_version` in `get_result_schema()`.\n- Backend: Pin contract ID/version, regenerate parity tests from snapshots post-release.\n\n**Backend Dependency Expectations**:\n- Match `calculate_sla_view()` exactly with local logic.\n- Consume `test_snapshots/tests/*.json` for golden vectors.\n- Monitor git tags `vX.Y.Z` for releases.\n\n## Event Convention
 
 Lifecycle events are versioned so backend consumers can reason about event shape
 without inferring it from position alone.
