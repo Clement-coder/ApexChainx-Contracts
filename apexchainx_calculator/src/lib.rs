@@ -2,28 +2,70 @@
 
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, symbol_short, Address, Env, Map, Symbol,
+    Vec,
 };
 
 #[contract]
 pub struct SLACalculatorContract;
 
-// --------------------
+#[cfg(test)]
+mod tests;
+
+// -----------------------------------------------------------------------
 // Storage keys
-// --------------------
+// -----------------------------------------------------------------------
 const ADMIN_KEY: Symbol = symbol_short!("ADMIN");
+const OPERATOR_KEY: Symbol = symbol_short!("OPERATOR"); // #28
 const CONFIG_KEY: Symbol = symbol_short!("CONFIG");
+const PAUSED_KEY: Symbol = symbol_short!("PAUSED"); // #27
+const STATS_KEY: Symbol = symbol_short!("STATS"); // #29
+const HISTORY_KEY: Symbol = symbol_short!("HIST");
 const STORAGE_VERSION_KEY: Symbol = symbol_short!("VER");
 const STORAGE_VERSION: u32 = 1;
+const RESULT_SCHEMA_VERSION: u32 = 1;
 
-// --------------------
+// -----------------------------------------------------------------------
 // Events
-// --------------------
+//
+// All events share the same topic layout:
+//   topic[0] = event name (Symbol constant below)
+//   topic[1] = event version ("v1")
+//   topic[2] = event-specific context (severity, caller address, etc.)
+//
+// Event payloads (data tuple field order):
+//
+//   sla_calc  → (outage_id: Symbol, status: Symbol, payment_type: Symbol,
+//                rating: Symbol, mttr_minutes: u32, threshold_minutes: u32,
+//                amount: i128)
+//
+//   cfg_upd   → (threshold_minutes: u32, penalty_per_minute: i128,
+//                reward_base: i128)
+//             context = severity Symbol
+//
+//   paused    → (true,)
+//   unpause   → (false,)
+//             context = caller Address
+//
+//   op_set    → (new_operator: Address,)
+//             context = caller Address
+//
+//   pruned    → (removed_count: u32, kept_count: u32)
+//             context = caller Address
+//
+// Versioning: breaking payload changes increment the version symbol (v2, …).
+// Additive fields are not considered breaking.
+// -----------------------------------------------------------------------
 const EVENT_SLA_CALC: Symbol = symbol_short!("sla_calc");
 const EVENT_CONFIG_UPD: Symbol = symbol_short!("cfg_upd");
+const EVENT_PAUSED: Symbol = symbol_short!("paused"); // #27
+const EVENT_UNPAUSED: Symbol = symbol_short!("unpause"); // #27
+const EVENT_OP_SET: Symbol = symbol_short!("op_set"); // #28
+const EVENT_PRUNED: Symbol = symbol_short!("pruned");
+const EVENT_VERSION: Symbol = symbol_short!("v1");
 
-// --------------------
+// -----------------------------------------------------------------------
 // Errors
-// --------------------
+// -----------------------------------------------------------------------
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[repr(u32)]
@@ -33,11 +75,12 @@ pub enum SLAError {
     Unauthorized = 3,
     ConfigNotFound = 4,
     VersionMismatch = 5,
+    ContractPaused = 6, // #27
 }
 
-// --------------------
+// -----------------------------------------------------------------------
 // Types
-// --------------------
+// -----------------------------------------------------------------------
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SLAConfig {
@@ -50,32 +93,89 @@ pub struct SLAConfig {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SLAResult {
     pub outage_id: Symbol,
-    pub status: Symbol,       // "met" or "viol"
+    pub status: Symbol, // "met" | "viol"
     pub mttr_minutes: u32,
     pub threshold_minutes: u32,
     pub amount: i128,         // negative = penalty, positive = reward
-    pub payment_type: Symbol, // "rew" or "pen"
-    pub rating: Symbol,       // "top", "excel", "good", "poor"
+    pub payment_type: Symbol, // "rew" | "pen"
+    pub rating: Symbol,       // "top" | "excel" | "good" | "poor"
 }
 
-// --------------------
-// Contract impl
-// --------------------
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SLAConfigEntry {
+    pub severity: Symbol,
+    pub config: SLAConfig,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SLAConfigSnapshot {
+    pub version: Symbol,
+    pub entries: Vec<SLAConfigEntry>,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SLAResultSchema {
+    pub version: Symbol,
+    pub schema_version: u32,
+    pub status_met: Symbol,
+    pub status_violated: Symbol,
+    pub payment_reward: Symbol,
+    pub payment_penalty: Symbol,
+    pub rating_exceptional: Symbol,
+    pub rating_excellent: Symbol,
+    pub rating_good: Symbol,
+    pub rating_poor: Symbol,
+}
+
+/// #29 – Cumulative on-chain SLA performance metrics.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SLAStats {
+    pub total_calculations: u64,
+    pub total_violations: u64,
+    pub total_rewards: i128,   // sum of all reward amounts paid out
+    pub total_penalties: i128, // sum of all penalty amounts (stored positive)
+}
+
+// -----------------------------------------------------------------------
+// Contract implementation
+// -----------------------------------------------------------------------
 #[contractimpl]
 impl SLACalculatorContract {
-    // --------------------
-    // Init & Admin
-    // --------------------
+    // -------------------------------------------------------------------
+    // Initialisation
+    // -------------------------------------------------------------------
 
-    pub fn initialize(env: Env, admin: Address) -> Result<(), SLAError> {
+    /// Deploy the contract.
+    /// `admin`    – may update config, pause/unpause, and assign the operator.
+    /// `operator` – may call `calculate_sla`.
+    pub fn initialize(env: Env, admin: Address, operator: Address) -> Result<(), SLAError> {
         if env.storage().instance().has(&ADMIN_KEY) {
             return Err(SLAError::AlreadyInitialized);
         }
 
         env.storage().instance().set(&ADMIN_KEY, &admin);
+        env.storage().instance().set(&OPERATOR_KEY, &operator); // #28
+        env.storage().instance().set(&PAUSED_KEY, &false); // #27
+
+        // #29 – initialise zeroed stats
+        env.storage().instance().set(
+            &STATS_KEY,
+            &SLAStats {
+                total_calculations: 0,
+                total_violations: 0,
+                total_rewards: 0,
+                total_penalties: 0,
+            },
+        );
+        env.storage()
+            .instance()
+            .set(&HISTORY_KEY, &Vec::<SLAResult>::new(&env));
 
         let mut configs = Map::<Symbol, SLAConfig>::new(&env);
-
         configs.set(
             symbol_short!("critical"),
             SLAConfig {
@@ -84,7 +184,6 @@ impl SLACalculatorContract {
                 reward_base: 750,
             },
         );
-
         configs.set(
             symbol_short!("high"),
             SLAConfig {
@@ -93,7 +192,6 @@ impl SLACalculatorContract {
                 reward_base: 750,
             },
         );
-
         configs.set(
             symbol_short!("medium"),
             SLAConfig {
@@ -102,7 +200,6 @@ impl SLACalculatorContract {
                 reward_base: 750,
             },
         );
-
         configs.set(
             symbol_short!("low"),
             SLAConfig {
@@ -117,6 +214,10 @@ impl SLACalculatorContract {
         Ok(())
     }
 
+    // -------------------------------------------------------------------
+    // Role queries
+    // -------------------------------------------------------------------
+
     pub fn get_admin(env: Env) -> Result<Address, SLAError> {
         Self::check_version(&env)?;
         env.storage()
@@ -125,29 +226,327 @@ impl SLACalculatorContract {
             .ok_or(SLAError::NotInitialized)
     }
 
-    fn write_version(env: &Env) {
-    env.storage()
-        .instance()
-        .set(&STORAGE_VERSION_KEY, &STORAGE_VERSION);
-}
-
-fn check_version(env: &Env) -> Result<(), SLAError> {
-    let v: u32 = env
-        .storage()
-        .instance()
-        .get(&STORAGE_VERSION_KEY)
-        .ok_or(SLAError::NotInitialized)?;
-
-    if v != STORAGE_VERSION {
-        return Err(SLAError::VersionMismatch);
+    /// #28 – Returns the current operator address.
+    pub fn get_operator(env: Env) -> Result<Address, SLAError> {
+        Self::check_version(&env)?;
+        env.storage()
+            .instance()
+            .get(&OPERATOR_KEY)
+            .ok_or(SLAError::NotInitialized)
     }
 
-    Ok(())
-}
+    // -------------------------------------------------------------------
+    // #28 – Operator management (admin only)
+    // -------------------------------------------------------------------
 
-    // --------------------
-    // Internal helper
-    // --------------------
+    /// Replace the operator address (admin only).
+    /// Emits an `op_set` event.
+    pub fn set_operator(env: Env, caller: Address, new_operator: Address) -> Result<(), SLAError> {
+        Self::check_version(&env)?;
+        Self::require_admin(&env, &caller)?;
+
+        env.storage().instance().set(&OPERATOR_KEY, &new_operator);
+
+        env.events().publish(
+            (EVENT_OP_SET, EVENT_VERSION, caller),
+            (new_operator.clone(),),
+        );
+
+        Ok(())
+    }
+
+    // -------------------------------------------------------------------
+    // #27 – Pause / Unpause (admin only)
+    // -------------------------------------------------------------------
+
+    /// Pause the contract; `calculate_sla` will be blocked until unpaused.
+    /// Emits a `paused` event.
+    pub fn pause(env: Env, caller: Address) -> Result<(), SLAError> {
+        Self::check_version(&env)?;
+        Self::require_admin(&env, &caller)?;
+
+        env.storage().instance().set(&PAUSED_KEY, &true);
+        env.events()
+            .publish((EVENT_PAUSED, EVENT_VERSION, caller), (true,));
+        Ok(())
+    }
+
+    /// Unpause the contract.
+    /// Emits an `unpause` event.
+    pub fn unpause(env: Env, caller: Address) -> Result<(), SLAError> {
+        Self::check_version(&env)?;
+        Self::require_admin(&env, &caller)?;
+
+        env.storage().instance().set(&PAUSED_KEY, &false);
+        env.events()
+            .publish((EVENT_UNPAUSED, EVENT_VERSION, caller), (false,));
+        Ok(())
+    }
+
+    /// Returns `true` when the contract is paused.
+    pub fn is_paused(env: Env) -> Result<bool, SLAError> {
+        Self::check_version(&env)?;
+        Ok(env.storage().instance().get(&PAUSED_KEY).unwrap_or(false))
+    }
+
+    // -------------------------------------------------------------------
+    // Config management (admin only)                                 #28
+    // -------------------------------------------------------------------
+
+    pub fn set_config(
+        env: Env,
+        caller: Address,
+        severity: Symbol,
+        threshold_minutes: u32,
+        penalty_per_minute: i128,
+        reward_base: i128,
+    ) -> Result<(), SLAError> {
+        Self::check_version(&env)?;
+        Self::require_admin(&env, &caller)?; // #28 – admin role enforced
+
+        let mut configs: Map<Symbol, SLAConfig> = env
+            .storage()
+            .instance()
+            .get(&CONFIG_KEY)
+            .ok_or(SLAError::NotInitialized)?;
+
+        configs.set(
+            severity.clone(),
+            SLAConfig {
+                threshold_minutes,
+                penalty_per_minute,
+                reward_base,
+            },
+        );
+        env.storage().instance().set(&CONFIG_KEY, &configs);
+
+        env.events().publish(
+            (EVENT_CONFIG_UPD, EVENT_VERSION, severity),
+            (threshold_minutes, penalty_per_minute, reward_base),
+        );
+        Ok(())
+    }
+
+    pub fn get_config(env: Env, severity: Symbol) -> Result<SLAConfig, SLAError> {
+        Self::check_version(&env)?;
+        Self::load_config(&env, &severity)
+    }
+
+    pub fn list_configs(env: Env) -> Result<Map<Symbol, SLAConfig>, SLAError> {
+        Self::check_version(&env)?;
+        env.storage()
+            .instance()
+            .get(&CONFIG_KEY)
+            .ok_or(SLAError::NotInitialized)
+    }
+
+    /// Returns a deterministic backend-friendly snapshot of all config values.
+    pub fn get_config_snapshot(env: Env) -> Result<SLAConfigSnapshot, SLAError> {
+        Self::check_version(&env)?;
+
+        let mut entries = Vec::new(&env);
+        let severities = [
+            symbol_short!("critical"),
+            symbol_short!("high"),
+            symbol_short!("medium"),
+            symbol_short!("low"),
+        ];
+
+        for severity in severities {
+            let config = Self::load_config(&env, &severity)?;
+            entries.push_back(SLAConfigEntry { severity, config });
+        }
+
+        Ok(SLAConfigSnapshot {
+            version: symbol_short!("v1"),
+            entries,
+        })
+    }
+
+    /// Returns a deterministic config version hash so backend sync logic can
+    /// detect meaningful config changes cheaply.
+    ///
+    /// The hash is a simple additive checksum over all severity config fields
+    /// in canonical order (critical → high → medium → low).  It is stable
+    /// across repeated reads when config is unchanged and changes predictably
+    /// when any field is updated.
+    pub fn get_config_version_hash(env: Env) -> Result<u64, SLAError> {
+        Self::check_version(&env)?;
+        let severities = [
+            symbol_short!("critical"),
+            symbol_short!("high"),
+            symbol_short!("medium"),
+            symbol_short!("low"),
+        ];
+        let mut hash: u64 = 0;
+        for sev in severities {
+            let cfg = Self::load_config(&env, &sev)?;
+            hash = hash
+                .wrapping_add(cfg.threshold_minutes as u64)
+                .wrapping_add(cfg.penalty_per_minute as u64)
+                .wrapping_add(cfg.reward_base as u64);
+        }
+        Ok(hash)
+    }
+
+    pub fn get_result_schema(env: Env) -> Result<SLAResultSchema, SLAError> {
+        Self::check_version(&env)?;
+        Ok(SLAResultSchema {
+            version: symbol_short!("v1"),
+            schema_version: RESULT_SCHEMA_VERSION,
+            status_met: symbol_short!("met"),
+            status_violated: symbol_short!("viol"),
+            payment_reward: symbol_short!("rew"),
+            payment_penalty: symbol_short!("pen"),
+            rating_exceptional: symbol_short!("top"),
+            rating_excellent: symbol_short!("excel"),
+            rating_good: symbol_short!("good"),
+            rating_poor: symbol_short!("poor"),
+        })
+    }
+
+    // -------------------------------------------------------------------
+    // #29 – Stats view
+    // -------------------------------------------------------------------
+
+    /// Returns the cumulative SLA performance statistics.
+    pub fn get_stats(env: Env) -> Result<SLAStats, SLAError> {
+        Self::check_version(&env)?;
+        env.storage()
+            .instance()
+            .get(&STATS_KEY)
+            .ok_or(SLAError::NotInitialized)
+    }
+
+    // -------------------------------------------------------------------
+    // #31 - SLA Audit Mode (View-only calculation)
+    // -------------------------------------------------------------------
+
+    /// Recalculates SLA deterministically without mutating any state or emitting events.
+    /// Can be called by anyone for verification and audit purposes.
+    pub fn calculate_sla_view(
+        env: Env,
+        outage_id: Symbol,
+        severity: Symbol,
+        mttr_minutes: u32,
+    ) -> Result<SLAResult, SLAError> {
+        Self::check_version(&env)?;
+        // We bypass pause and operator checks to allow continuous, public verification
+        let cfg = Self::load_config(&env, &severity)?;
+
+        // Delegate to pure internal math
+        Ok(Self::compute_result(outage_id, mttr_minutes, &cfg))
+    }
+
+    // -------------------------------------------------------------------
+    // SLA calculation (operator only)                                #28
+    // -------------------------------------------------------------------
+
+    pub fn calculate_sla(
+        env: Env,
+        caller: Address, // #28 – operator must identify themselves
+        outage_id: Symbol,
+        severity: Symbol,
+        mttr_minutes: u32,
+    ) -> Result<SLAResult, SLAError> {
+        Self::check_version(&env)?;
+        Self::require_not_paused(&env)?; // #27
+        Self::require_operator(&env, &caller)?; // #28
+
+        let cfg = Self::load_config(&env, &severity)?;
+        let result = Self::compute_result(outage_id.clone(), mttr_minutes, &cfg);
+        let mut history: Vec<SLAResult> = env
+            .storage()
+            .instance()
+            .get(&HISTORY_KEY)
+            .unwrap_or_else(|| Vec::new(&env));
+
+        history.push_back(result.clone());
+        env.storage().instance().set(&HISTORY_KEY, &history);
+
+        // Mutate stats and emit events depending on outcome
+        if result.status == symbol_short!("viol") {
+            // #29 – update stats (pass positive penalty value)
+            Self::increment_stats(&env, false, 0, -result.amount);
+        } else {
+            // #29 – update stats
+            Self::increment_stats(&env, true, result.amount, 0);
+        }
+
+        Self::publish_sla_event(&env, severity, &result);
+
+        Ok(result)
+    }
+
+    // -------------------------------------------------------------------
+    // Private helpers
+    // -------------------------------------------------------------------
+
+    /// Pure helper to generate the SLAResult deterministically
+    fn compute_result(outage_id: Symbol, mttr_minutes: u32, cfg: &SLAConfig) -> SLAResult {
+        let threshold = cfg.threshold_minutes;
+
+        // Case 1: SLA violated → penalty
+        if mttr_minutes > threshold {
+            let overtime = (mttr_minutes - threshold) as i128;
+            let penalty = overtime * cfg.penalty_per_minute;
+
+            SLAResult {
+                outage_id,
+                status: symbol_short!("viol"),
+                mttr_minutes,
+                threshold_minutes: threshold,
+                amount: -penalty,
+                payment_type: symbol_short!("pen"),
+                rating: symbol_short!("poor"),
+            }
+        } else {
+            // Case 2: SLA met → reward
+            let performance_ratio = if threshold == 0 {
+                0
+            } else {
+                (mttr_minutes * 100) / threshold
+            };
+
+            let (multiplier, rating) = if performance_ratio < 50 {
+                (200u32, symbol_short!("top"))
+            } else if performance_ratio < 75 {
+                (150u32, symbol_short!("excel"))
+            } else {
+                (100u32, symbol_short!("good"))
+            };
+
+            let reward = (cfg.reward_base * multiplier as i128) / 100;
+
+            SLAResult {
+                outage_id,
+                status: symbol_short!("met"),
+                mttr_minutes,
+                threshold_minutes: threshold,
+                amount: reward,
+                payment_type: symbol_short!("rew"),
+                rating,
+            }
+        }
+    }
+
+    fn write_version(env: &Env) {
+        env.storage()
+            .instance()
+            .set(&STORAGE_VERSION_KEY, &STORAGE_VERSION);
+    }
+
+    fn check_version(env: &Env) -> Result<(), SLAError> {
+        let v: u32 = env
+            .storage()
+            .instance()
+            .get(&STORAGE_VERSION_KEY)
+            .ok_or(SLAError::NotInitialized)?;
+        if v != STORAGE_VERSION {
+            return Err(SLAError::VersionMismatch);
+        }
+        Ok(())
+    }
 
     fn require_admin(env: &Env, caller: &Address) -> Result<(), SLAError> {
         let admin: Address = env
@@ -155,157 +554,141 @@ fn check_version(env: &Env) -> Result<(), SLAError> {
             .instance()
             .get(&ADMIN_KEY)
             .ok_or(SLAError::NotInitialized)?;
-
         if caller != &admin {
             return Err(SLAError::Unauthorized);
         }
-
         Ok(())
     }
 
-    // --------------------
-    // Config management
-    // --------------------
+    /// #28 – Ensures the caller holds the operator role.
+    fn require_operator(env: &Env, caller: &Address) -> Result<(), SLAError> {
+        let operator: Address = env
+            .storage()
+            .instance()
+            .get(&OPERATOR_KEY)
+            .ok_or(SLAError::NotInitialized)?;
+        if caller != &operator {
+            return Err(SLAError::Unauthorized);
+        }
+        Ok(())
+    }
 
-pub fn set_config(
-    env: Env,
-    caller: Address,
-    severity: Symbol,
-    threshold_minutes: u32,
-    penalty_per_minute: i128,
-    reward_base: i128,
-) -> Result<(), SLAError> {
-    Self::check_version(&env)?;
-    Self::require_admin(&env, &caller)?;
+    /// #27 – Blocks execution when the contract is paused.
+    fn require_not_paused(env: &Env) -> Result<(), SLAError> {
+        let paused: bool = env.storage().instance().get(&PAUSED_KEY).unwrap_or(false);
+        if paused {
+            return Err(SLAError::ContractPaused);
+        }
+        Ok(())
+    }
 
-    let mut configs: Map<Symbol, SLAConfig> = env
-        .storage()
-        .instance()
-        .get(&CONFIG_KEY)
-        .ok_or(SLAError::NotInitialized)?;
-
-    let cfg = SLAConfig {
-        threshold_minutes,
-        penalty_per_minute,
-        reward_base,
-    };
-
-    configs.set(severity.clone(), cfg);
-    env.storage().instance().set(&CONFIG_KEY, &configs);
-
-    // 🔔 Emit config update event
-    env.events().publish(
-        (EVENT_CONFIG_UPD, severity),
-        (threshold_minutes, penalty_per_minute, reward_base),
-    );
-
-    Ok(())
-}
-
-    pub fn get_config(env: Env, severity: Symbol) -> Result<SLAConfig, SLAError> {
-        Self::check_version(&env)?;
-        
+    /// Shared config lookup that borrows env (avoids consuming it).
+    fn load_config(env: &Env, severity: &Symbol) -> Result<SLAConfig, SLAError> {
         let configs: Map<Symbol, SLAConfig> = env
             .storage()
             .instance()
             .get(&CONFIG_KEY)
             .ok_or(SLAError::NotInitialized)?;
-
-        configs.get(severity).ok_or(SLAError::ConfigNotFound)
+        configs
+            .get(severity.clone())
+            .ok_or(SLAError::ConfigNotFound)
     }
 
-pub fn list_configs(env: Env) -> Result<Map<Symbol, SLAConfig>, SLAError> {
-    Self::check_version(&env)?;
-    env.storage()
-        .instance()
-        .get(&CONFIG_KEY)
-        .ok_or(SLAError::NotInitialized)
-}
+    /// #29 – Read-modify-write the stats entry.
+    /// `met`     – true when SLA was met (reward path), false for violation.
+    /// `reward`  – reward amount to add (0 on violation path).
+    /// `penalty` – penalty amount to add, stored positive (0 on met path).
+    fn increment_stats(env: &Env, met: bool, reward: i128, penalty: i128) {
+        let mut stats: SLAStats = env
+            .storage()
+            .instance()
+            .get(&STATS_KEY)
+            .unwrap_or(SLAStats {
+                total_calculations: 0,
+                total_violations: 0,
+                total_rewards: 0,
+                total_penalties: 0,
+            });
 
-pub fn get_config(env: Env, severity: Symbol) -> Result<SLAConfig, SLAError> {
-    let configs: Map<Symbol, SLAConfig> = env
-        .storage()
-        .instance()
-        .get(&CONFIG_KEY)
-        .ok_or(SLAError::NotInitialized)?;
+        stats.total_calculations += 1;
 
-    configs.get(severity).ok_or(SLAError::ConfigNotFound)
-}
+        if met {
+            stats.total_rewards += reward;
+        } else {
+            stats.total_violations += 1;
+            stats.total_penalties += penalty;
+        }
 
+        env.storage().instance().set(&STATS_KEY, &stats);
+    }
 
-pub fn calculate_sla(
-    env: Env,
-    outage_id: Symbol,
-    severity: Symbol,
-    mttr_minutes: u32,
-) -> Result<SLAResult, SLAError> {
-    Self::check_version(&env)?;
-    let cfg = Self::get_config(env.clone(), severity.clone())?;
-    let threshold = cfg.threshold_minutes;
-
-    // --------------------
-    // Case 1: violated → penalty
-    // --------------------
-    if mttr_minutes > threshold {
-        let overtime = (mttr_minutes - threshold) as i128;
-        let penalty = overtime * cfg.penalty_per_minute;
-
-        // 🔔 Emit SLA event
+    fn publish_sla_event(env: &Env, severity: Symbol, result: &SLAResult) {
         env.events().publish(
-            (EVENT_SLA_CALC, severity.clone()),
-            (outage_id.clone(), symbol_short!("viol"), -penalty),
+            (EVENT_SLA_CALC, EVENT_VERSION, severity),
+            (
+                result.outage_id.clone(),
+                result.status.clone(),
+                result.payment_type.clone(),
+                result.rating.clone(),
+                result.mttr_minutes,
+                result.threshold_minutes,
+                result.amount,
+            ),
         );
-
-        return Ok(SLAResult {
-            outage_id,
-            status: symbol_short!("viol"),
-            mttr_minutes,
-            threshold_minutes: threshold,
-            amount: -penalty,
-            payment_type: symbol_short!("pen"),
-            rating: symbol_short!("poor"),
-        });
     }
 
-    // --------------------
-    // Case 2: met → reward
-    // --------------------
-    let performance_ratio = (mttr_minutes * 100) / threshold;
+    // -------------------------------------------------------------------
+    // #33 - History & Compaction (Admin only)
+    // -------------------------------------------------------------------
 
-    let (multiplier, rating) = if performance_ratio < 50 {
-        (200, symbol_short!("top"))
-    } else if performance_ratio < 75 {
-        (150, symbol_short!("excel"))
-    } else {
-        (100, symbol_short!("good"))
-    };
+    /// Returns the raw log of recent SLA calculations stored on-chain.
+    pub fn get_history(env: Env) -> Result<Vec<SLAResult>, SLAError> {
+        Self::check_version(&env)?;
+        Ok(env
+            .storage()
+            .instance()
+            .get(&HISTORY_KEY)
+            .unwrap_or_else(|| Vec::new(&env)))
+    }
 
-    let reward = (cfg.reward_base * (multiplier as i128)) / 100;
+    /// Prunes the SLA calculation history to prevent indefinite storage growth.
+    /// `keep_latest` dictates how many of the most recent records to retain.
+    pub fn prune_history(env: Env, caller: Address, keep_latest: u32) -> Result<(), SLAError> {
+        Self::check_version(&env)?;
+        Self::require_admin(&env, &caller)?;
 
-    // 🔔 Emit SLA event
-    env.events().publish(
-        (EVENT_SLA_CALC, severity.clone()),
-        (outage_id.clone(), symbol_short!("met"), reward),
-    );
+        let history: Vec<SLAResult> = env
+            .storage()
+            .instance()
+            .get(&HISTORY_KEY)
+            .unwrap_or_else(|| Vec::new(&env));
+        let len = history.len();
 
-    Ok(SLAResult {
-        outage_id,
-        status: symbol_short!("met"),
-        mttr_minutes,
-        threshold_minutes: threshold,
-        amount: reward,
-        payment_type: symbol_short!("rew"),
-        rating,
-    })
-}
+        if len > keep_latest {
+            let remove_count = len - keep_latest;
+            let mut new_history = Vec::new(&env);
 
-    // --------------------
-    // SC-079: History / retention read helpers
-    // --------------------
+            // Rebuild the vector keeping only the most recent entries
+            for i in remove_count..len {
+                new_history.push_back(history.get(i).unwrap());
+            }
+
+            env.storage().instance().set(&HISTORY_KEY, &new_history);
+            env.events().publish(
+                (EVENT_PRUNED, EVENT_VERSION, caller),
+                (remove_count, keep_latest),
+            );
+        }
+
+        Ok(())
+    }
+
+    // -------------------------------------------------------------------
+    // SC-079: Read-only history / retention helpers
+    // -------------------------------------------------------------------
 
     /// Returns the number of severity tiers currently configured.
-    /// Off-chain consumers can use this to know how much config state exists
-    /// without fetching the full map.
+    /// Off-chain consumers can inspect retention state without fetching the full map.
     pub fn get_config_count(env: Env) -> Result<u32, SLAError> {
         Self::check_version(&env)?;
         let configs: Map<Symbol, SLAConfig> = env
@@ -316,8 +699,8 @@ pub fn calculate_sla(
         Ok(configs.len())
     }
 
-    /// Returns the current storage schema version — useful for off-chain
-    /// consumers to detect whether a migration has occurred.
+    /// Returns the current storage schema version so off-chain consumers can
+    /// detect whether a migration has occurred.
     pub fn get_storage_version(env: Env) -> Result<u32, SLAError> {
         env.storage()
             .instance()
@@ -325,4 +708,3 @@ pub fn calculate_sla(
             .ok_or(SLAError::NotInitialized)
     }
 }
-

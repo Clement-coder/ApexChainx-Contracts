@@ -2,13 +2,19 @@
 name = "apexchainx_calculator"
 version = "0.1.0"
 edition = "2021"
+description = "Soroban SLA calculator contract for the ApexChainx system"
+license = "MIT"
+repository = "https://github.com/OpSoll/ApexChainx-Contracts"
+publish = false
 
 [lib]
 crate-type = ["cdylib"]
+
+[features]
+export-snapshots = []
 
 [dependencies]
 soroban-sdk = "21.0.0"
 
 [dev-dependencies]
 soroban-sdk = { version = "21.0.0", features = ["testutils"] }
-
