@@ -85,6 +85,10 @@ pub enum SLAError {
     VersionMismatch = 5,
     ContractPaused = 6,    // #27
     NoPendingTransfer = 7, // #63 #64
+    InvalidThreshold = 8,   // #70
+    InvalidPenalty = 9,    // #70
+    InvalidReward = 10,    // #70
+    InvalidSeverity = 11,  // #70
 }
 
 // -----------------------------------------------------------------------
@@ -477,6 +481,9 @@ impl SLACalculatorContract {
     ) -> Result<(), SLAError> {
         Self::check_version(&env)?;
         Self::require_admin(&env, &caller)?; // #28 – admin role enforced
+        
+        // #70 – Validate configuration parameters
+        Self::validate_config(&severity, threshold_minutes, penalty_per_minute, reward_base)?;
 
         let mut configs: Map<Symbol, SLAConfig> = env
             .storage()
@@ -813,6 +820,80 @@ impl SLACalculatorContract {
         if paused {
             return Err(SLAError::ContractPaused);
         }
+        Ok(())
+    }
+
+    /// #70 – Validates configuration parameters to ensure safe and meaningful values.
+    fn validate_config(
+        severity: &Symbol,
+        threshold_minutes: u32,
+        penalty_per_minute: i128,
+        reward_base: i128,
+    ) -> Result<(), SLAError> {
+        // Validate severity is one of the supported values
+        let valid_severities = [
+            symbol_short!("critical"),
+            symbol_short!("high"),
+            symbol_short!("medium"),
+            symbol_short!("low"),
+        ];
+        if !valid_severities.contains(severity) {
+            return Err(SLAError::InvalidSeverity);
+        }
+
+        // Threshold must be between 1 and 1440 minutes (24 hours max)
+        if threshold_minutes == 0 || threshold_minutes > 1440 {
+            return Err(SLAError::InvalidThreshold);
+        }
+
+        // Penalty must be positive and reasonable (1 to 10000 per minute)
+        if penalty_per_minute <= 0 || penalty_per_minute > 10000 {
+            return Err(SLAError::InvalidPenalty);
+        }
+
+        // Reward base must be positive and reasonable (1 to 100000)
+        if reward_base <= 0 || reward_base > 100000 {
+            return Err(SLAError::InvalidReward);
+        }
+
+        // Severity-specific validation to ensure logical consistency
+        match severity.to_string().as_str() {
+            "critical" => {
+                // Critical should have shortest thresholds and highest penalties
+                if threshold_minutes > 60 {
+                    return Err(SLAError::InvalidThreshold);
+                }
+                if penalty_per_minute < 50 {
+                    return Err(SLAError::InvalidPenalty);
+                }
+            }
+            "high" => {
+                // High severity thresholds should be reasonable
+                if threshold_minutes > 120 {
+                    return Err(SLAError::InvalidThreshold);
+                }
+                if penalty_per_minute < 25 {
+                    return Err(SLAError::InvalidPenalty);
+                }
+            }
+            "medium" => {
+                // Medium severity thresholds
+                if threshold_minutes > 240 {
+                    return Err(SLAError::InvalidThreshold);
+                }
+                if penalty_per_minute < 10 {
+                    return Err(SLAError::InvalidPenalty);
+                }
+            }
+            "low" => {
+                // Low severity can have longer thresholds but lower penalties
+                if penalty_per_minute > 100 {
+                    return Err(SLAError::InvalidPenalty);
+                }
+            }
+            _ => return Err(SLAError::InvalidSeverity),
+        }
+
         Ok(())
     }
 

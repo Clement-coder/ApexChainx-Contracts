@@ -1753,3 +1753,237 @@ fn test_set_config_then_calculate_unknown_severity_still_rejects_other_unknown()
         &5,
     );
 }
+
+// ============================================================
+// #70 – Configuration Validation Tests
+// ============================================================
+
+#[test]
+fn test_valid_config_passes_validation() {
+    let (_env, client, actors) = setup();
+
+    // All these should succeed
+    client.set_config(&actors.admin, &symbol_short!("critical"), &30, &150, &1000);
+    client.set_config(&actors.admin, &symbol_short!("high"), &45, &75, &800);
+    client.set_config(&actors.admin, &symbol_short!("medium"), &90, &30, &600);
+    client.set_config(&actors.admin, &symbol_short!("low"), &180, &15, &500);
+
+    // Verify values were set
+    let cfg = client.get_config(&symbol_short!("critical"));
+    assert_eq!(cfg.threshold_minutes, 30);
+    assert_eq!(cfg.penalty_per_minute, 150);
+    assert_eq!(cfg.reward_base, 1000);
+}
+
+#[test]
+#[should_panic]
+fn test_invalid_severity_fails_validation() {
+    let (_env, client, actors) = setup();
+    // "urgent" is not a supported severity
+    client.set_config(&actors.admin, &symbol_short!("urgent"), &15, &100, &750);
+}
+
+#[test]
+#[should_panic]
+fn test_zero_threshold_fails_validation() {
+    let (_env, client, actors) = setup();
+    // Threshold cannot be 0
+    client.set_config(&actors.admin, &symbol_short!("critical"), &0, &100, &750);
+}
+
+#[test]
+#[should_panic]
+fn test_threshold_too_large_fails_validation() {
+    let (_env, client, actors) = setup();
+    // Threshold exceeds 1440 minute (24 hour) maximum
+    client.set_config(&actors.admin, &symbol_short!("low"), &1500, &10, &600);
+}
+
+#[test]
+#[should_panic]
+fn test_negative_penalty_fails_validation() {
+    let (_env, client, actors) = setup();
+    // Penalty must be positive
+    client.set_config(&actors.admin, &symbol_short!("critical"), &15, &-100, &750);
+}
+
+#[test]
+#[should_panic]
+fn test_zero_penalty_fails_validation() {
+    let (_env, client, actors) = setup();
+    // Penalty must be positive (cannot be 0)
+    client.set_config(&actors.admin, &symbol_short!("critical"), &15, &0, &750);
+}
+
+#[test]
+#[should_panic]
+fn test_penalty_too_large_fails_validation() {
+    let (_env, client, actors) = setup();
+    // Penalty exceeds 10,000 maximum
+    client.set_config(&actors.admin, &symbol_short!("critical"), &15, &15000, &750);
+}
+
+#[test]
+#[should_panic]
+fn test_negative_reward_fails_validation() {
+    let (_env, client, actors) = setup();
+    // Reward must be positive
+    client.set_config(&actors.admin, &symbol_short!("critical"), &15, &100, &-750);
+}
+
+#[test]
+#[should_panic]
+fn test_zero_reward_fails_validation() {
+    let (_env, client, actors) = setup();
+    // Reward must be positive (cannot be 0)
+    client.set_config(&actors.admin, &symbol_short!("critical"), &15, &100, &0);
+}
+
+#[test]
+#[should_panic]
+fn test_reward_too_large_fails_validation() {
+    let (_env, client, actors) = setup();
+    // Reward exceeds 100,000 maximum
+    client.set_config(&actors.admin, &symbol_short!("critical"), &15, &100, &150000);
+}
+
+// Severity-specific validation tests
+
+#[test]
+#[should_panic]
+fn test_critical_threshold_too_high_fails_validation() {
+    let (_env, client, actors) = setup();
+    // Critical severity threshold cannot exceed 60 minutes
+    client.set_config(&actors.admin, &symbol_short!("critical"), &90, &100, &750);
+}
+
+#[test]
+#[should_panic]
+fn test_critical_penalty_too_low_fails_validation() {
+    let (_env, client, actors) = setup();
+    // Critical severity penalty must be at least 50
+    client.set_config(&actors.admin, &symbol_short!("critical"), &15, &25, &750);
+}
+
+#[test]
+#[should_panic]
+fn test_high_threshold_too_high_fails_validation() {
+    let (_env, client, actors) = setup();
+    // High severity threshold cannot exceed 120 minutes
+    client.set_config(&actors.admin, &symbol_short!("high"), &150, &50, &750);
+}
+
+#[test]
+#[should_panic]
+fn test_high_penalty_too_low_fails_validation() {
+    let (_env, client, actors) = setup();
+    // High severity penalty must be at least 25
+    client.set_config(&actors.admin, &symbol_short!("high"), &30, &15, &750);
+}
+
+#[test]
+#[should_panic]
+fn test_medium_threshold_too_high_fails_validation() {
+    let (_env, client, actors) = setup();
+    // Medium severity threshold cannot exceed 240 minutes
+    client.set_config(&actors.admin, &symbol_short!("medium"), &300, &25, &750);
+}
+
+#[test]
+#[should_panic]
+fn test_medium_penalty_too_low_fails_validation() {
+    let (_env, client, actors) = setup();
+    // Medium severity penalty must be at least 10
+    client.set_config(&actors.admin, &symbol_short!("medium"), &60, &5, &750);
+}
+
+#[test]
+#[should_panic]
+fn test_low_penalty_too_high_fails_validation() {
+    let (_env, client, actors) = setup();
+    // Low severity penalty cannot exceed 100
+    client.set_config(&actors.admin, &symbol_short!("low"), &120, &150, &600);
+}
+
+// Edge case validation tests
+
+#[test]
+fn test_boundary_values_pass_validation() {
+    let (_env, client, actors) = setup();
+
+    // Test minimum valid values
+    client.set_config(&actors.admin, &symbol_short!("critical"), &1, &50, &1);
+    client.set_config(&actors.admin, &symbol_short!("high"), &1, &25, &1);
+    client.set_config(&actors.admin, &symbol_short!("medium"), &1, &10, &1);
+    client.set_config(&actors.admin, &symbol_short!("low"), &1, &1, &1);
+
+    // Test maximum valid values for severity-specific constraints
+    client.set_config(&actors.admin, &symbol_short!("critical"), &60, &10000, &100000);
+    client.set_config(&actors.admin, &symbol_short!("high"), &120, &10000, &100000);
+    client.set_config(&actors.admin, &symbol_short!("medium"), &240, &10000, &100000);
+    client.set_config(&actors.admin, &symbol_short!("low"), &1440, &100, &100000);
+}
+
+#[test]
+fn test_validation_prevents_partial_state_changes() {
+    let (_env, client, actors) = setup();
+
+    // Get original config
+    let original = client.get_config(&symbol_short!("critical"));
+    assert_eq!(original.threshold_minutes, 15);
+    assert_eq!(original.penalty_per_minute, 100);
+    assert_eq!(original.reward_base, 750);
+
+    // Attempt invalid config change - should fail without modifying state
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        client.set_config(&actors.admin, &symbol_short!("critical"), &0, &100, &750);
+    }));
+    assert!(result.is_err());
+
+    // Verify original config is unchanged
+    let unchanged = client.get_config(&symbol_short!("critical"));
+    assert_eq!(unchanged.threshold_minutes, 15);
+    assert_eq!(unchanged.penalty_per_minute, 100);
+    assert_eq!(unchanged.reward_base, 750);
+}
+
+#[test]
+fn test_validation_works_after_successful_config_change() {
+    let (_env, client, actors) = setup();
+
+    // Make a valid change first
+    client.set_config(&actors.admin, &symbol_short!("critical"), &30, &150, &1000);
+
+    // Now attempt an invalid change - should still fail
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        client.set_config(&actors.admin, &symbol_short!("critical"), &0, &150, &1000);
+    }));
+    assert!(result.is_err());
+
+    // Verify the valid change is still in place
+    let cfg = client.get_config(&symbol_short!("critical"));
+    assert_eq!(cfg.threshold_minutes, 30);
+    assert_eq!(cfg.penalty_per_minute, 150);
+    assert_eq!(cfg.reward_base, 1000);
+}
+
+#[test]
+fn test_validation_applies_to_all_severities_independently() {
+    let (_env, client, actors) = setup();
+
+    // Valid change to critical
+    client.set_config(&actors.admin, &symbol_short!("critical"), &25, &120, &900);
+
+    // Invalid change to high should not affect critical
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        client.set_config(&actors.admin, &symbol_short!("high"), &0, &50, &750);
+    }));
+    assert!(result.is_err());
+
+    // Verify critical is unchanged and high is still at default
+    let critical = client.get_config(&symbol_short!("critical"));
+    assert_eq!(critical.threshold_minutes, 25);
+    
+    let high = client.get_config(&symbol_short!("high"));
+    assert_eq!(high.threshold_minutes, 30); // still default
+}
