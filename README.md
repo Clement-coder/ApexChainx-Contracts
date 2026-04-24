@@ -212,6 +212,36 @@ Examples:
 - there is not yet a broader contract workspace with escrow or settlement modules
 - cross-repo contract invocation is still a backend integration concern, not something managed here directly
 
+## Governance Policy
+
+### Admin transfer (two-step)
+
+Admin authority is transferred via a two-step flow to prevent accidental reassignment:
+
+1. Current admin calls `propose_admin(caller, new_admin)` — stores a pending proposal.
+2. Proposed admin calls `accept_admin(caller)` — atomically promotes caller to admin and clears the proposal.
+
+The old admin retains authority until `accept_admin` succeeds. `get_pending_admin()` is queryable at any time.
+
+### Operator handoff (two-step)
+
+Operator rotation follows the same pattern:
+
+1. Admin calls `propose_operator(caller, new_operator)`.
+2. New operator calls `accept_operator(caller)` to activate.
+
+`get_pending_operator()` exposes the pending state for governance visibility.
+
+### Admin renounce
+
+`renounce_admin(caller)` permanently removes admin authority. This is **irreversible**: after renounce, all admin-gated functions (`set_config`, `pause`, `unpause`, `set_operator`, `prune_history`) are permanently locked. Any pending admin proposal is also cleared atomically.
+
+Backend operators should treat a renounced contract as immutable from a governance perspective. There is no recovery path by design — if recovery is needed, redeploy and reinitialize.
+
+### Pause metadata
+
+`pause(caller, reason)` stores a `PauseInfo` struct containing the reason string and the ledger timestamp at pause time. `get_pause_info()` returns this metadata while the contract is paused. `unpause` clears it. This gives backend operators operational context without requiring off-chain state.
+
 ## Related Repositories
 
 - `apexchainx-fe` -> frontend application

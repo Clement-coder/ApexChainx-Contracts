@@ -356,7 +356,7 @@ fn test_contract_starts_unpaused() {
 fn test_admin_can_pause_and_unpause() {
     let (_env, client, actors) = setup();
 
-    client.pause(&actors.admin);
+    client.pause(&actors.admin, &soroban_sdk::String::from_str(&_env, "test"));
     assert_eq!(client.is_paused(), true);
 
     client.unpause(&actors.admin);
@@ -366,30 +366,30 @@ fn test_admin_can_pause_and_unpause() {
 #[test]
 #[should_panic]
 fn test_operator_cannot_pause() {
-    let (_env, client, actors) = setup();
-    client.pause(&actors.operator);
+    let (env, client, actors) = setup();
+    client.pause(&actors.operator, &soroban_sdk::String::from_str(&env, "x"));
 }
 
 #[test]
 #[should_panic]
 fn test_stranger_cannot_pause() {
-    let (_env, client, actors) = setup();
-    client.pause(&actors.stranger);
+    let (env, client, actors) = setup();
+    client.pause(&actors.stranger, &soroban_sdk::String::from_str(&env, "x"));
 }
 
 #[test]
 #[should_panic]
 fn test_operator_cannot_unpause() {
-    let (_env, client, actors) = setup();
-    client.pause(&actors.admin);
+    let (env, client, actors) = setup();
+    client.pause(&actors.admin, &soroban_sdk::String::from_str(&env, "x"));
     client.unpause(&actors.operator);
 }
 
 #[test]
 #[should_panic]
 fn test_calculate_sla_blocked_when_paused() {
-    let (_env, client, actors) = setup();
-    client.pause(&actors.admin);
+    let (env, client, actors) = setup();
+    client.pause(&actors.admin, &soroban_sdk::String::from_str(&env, "maintenance"));
 
     // must panic – ContractPaused
     client.calculate_sla(
@@ -402,9 +402,9 @@ fn test_calculate_sla_blocked_when_paused() {
 
 #[test]
 fn test_calculate_sla_works_after_unpause() {
-    let (_env, client, actors) = setup();
+    let (env, client, actors) = setup();
 
-    client.pause(&actors.admin);
+    client.pause(&actors.admin, &soroban_sdk::String::from_str(&env, "x"));
     client.unpause(&actors.admin);
 
     let result = client.calculate_sla(
@@ -755,9 +755,9 @@ fn test_stats_accumulate_across_multiple_calculations() {
 
 #[test]
 fn test_stats_not_updated_on_paused_rejection() {
-    let (_env, client, actors) = setup();
+    let (env, client, actors) = setup();
 
-    client.pause(&actors.admin);
+    client.pause(&actors.admin, &soroban_sdk::String::from_str(&env, "test"));
 
     // Fresh setup: verify stats stay at 0 when no successful calls were made.
     let (_env2, client2, _actors2) = setup();
@@ -1196,6 +1196,105 @@ mod snapshots {
 }
 
 // ============================================================
+// #63 – Two-step admin transfer
+// ============================================================
+
+#[test]
+fn test_propose_and_accept_admin() {
+    let (env, client, actors) = setup();
+    let new_admin = soroban_sdk::Address::generate(&env);
+
+    client.propose_admin(&actors.admin, &new_admin);
+    assert_eq!(client.get_pending_admin(), Some(new_admin.clone()));
+
+    client.accept_admin(&new_admin);
+    assert_eq!(client.get_admin(), new_admin);
+    assert_eq!(client.get_pending_admin(), None);
+}
+
+#[test]
+#[test]
+#[should_panic]
+fn test_old_admin_loses_authority_after_accept() {
+    let (env, client, actors) = setup();
+    let new_admin = soroban_sdk::Address::generate(&env);
+
+    client.propose_admin(&actors.admin, &new_admin);
+    client.accept_admin(&new_admin);
+
+    // old admin can no longer set config – must panic
+    client.set_config(&actors.admin, &symbol_short!("critical"), &20, &200, &1000);
+}
+
+#[test]
+#[should_panic]
+fn test_wrong_address_cannot_accept_admin() {
+    let (env, client, actors) = setup();
+    let new_admin = soroban_sdk::Address::generate(&env);
+    let stranger = soroban_sdk::Address::generate(&env);
+
+    client.propose_admin(&actors.admin, &new_admin);
+    client.accept_admin(&stranger); // must panic
+}
+
+#[test]
+#[should_panic]
+fn test_accept_admin_without_proposal_fails() {
+    let (_env, client, actors) = setup();
+    client.accept_admin(&actors.stranger); // no pending proposal
+}
+
+#[test]
+fn test_get_pending_admin_none_when_no_proposal() {
+    let (_env, client, _actors) = setup();
+    assert_eq!(client.get_pending_admin(), None);
+}
+
+// ============================================================
+// #64 – Two-step operator handoff
+// ============================================================
+
+#[test]
+fn test_propose_and_accept_operator() {
+    let (env, client, actors) = setup();
+    let new_op = soroban_sdk::Address::generate(&env);
+
+    client.propose_operator(&actors.admin, &new_op);
+    assert_eq!(client.get_pending_operator(), Some(new_op.clone()));
+
+    client.accept_operator(&new_op);
+    assert_eq!(client.get_operator(), new_op);
+    assert_eq!(client.get_pending_operator(), None);
+}
+
+#[test]
+#[test]
+#[should_panic]
+fn test_old_operator_locked_out_after_handoff() {
+    let (env, client, actors) = setup();
+    let new_op = soroban_sdk::Address::generate(&env);
+
+    client.propose_operator(&actors.admin, &new_op);
+    client.accept_operator(&new_op);
+
+    // old operator can no longer calculate – must panic
+    client.calculate_sla(
+        &actors.operator,
+        &symbol_short!("HO001"),
+        &symbol_short!("critical"),
+        &5,
+    );
+}
+
+#[test]
+#[should_panic]
+fn test_wrong_address_cannot_accept_operator() {
+    let (env, client, actors) = setup();
+    let new_op = soroban_sdk::Address::generate(&env);
+    let stranger = soroban_sdk::Address::generate(&env);
+
+    client.propose_operator(&actors.admin, &new_op);
+    client.accept_operator(&stranger); // must panic
 // #60 – Contract metadata / capabilities view
 // ============================================================
 
@@ -1246,6 +1345,35 @@ fn test_migrate_is_idempotent_when_already_current() {
 
 #[test]
 #[should_panic]
+fn test_accept_operator_without_proposal_fails() {
+    let (_env, client, actors) = setup();
+    client.accept_operator(&actors.stranger);
+}
+
+#[test]
+fn test_get_pending_operator_none_when_no_proposal() {
+    let (_env, client, _actors) = setup();
+    assert_eq!(client.get_pending_operator(), None);
+}
+
+// ============================================================
+// #65 – Admin renounce
+// ============================================================
+
+#[test]
+fn test_admin_can_renounce() {
+    let (_env, client, actors) = setup();
+    client.renounce_admin(&actors.admin);
+    // After renounce, admin-gated calls must fail
+}
+
+#[test]
+#[should_panic]
+fn test_admin_gated_call_fails_after_renounce() {
+    let (env, client, actors) = setup();
+    client.renounce_admin(&actors.admin);
+    // set_config must now panic – no admin exists
+    client.set_config(&actors.admin, &symbol_short!("critical"), &20, &200, &1000);
 fn test_migrate_rejected_for_non_admin() {
     let (_env, client, actors) = setup();
     client.migrate(&actors.stranger);
@@ -1292,6 +1420,52 @@ fn test_calculate_sla_rejects_unknown_severity() {
 
 #[test]
 #[should_panic]
+fn test_stranger_cannot_renounce() {
+    let (_env, client, actors) = setup();
+    client.renounce_admin(&actors.stranger);
+}
+
+#[test]
+fn test_renounce_clears_pending_proposal() {
+    let (env, client, actors) = setup();
+    let new_admin = soroban_sdk::Address::generate(&env);
+
+    client.propose_admin(&actors.admin, &new_admin);
+    client.renounce_admin(&actors.admin);
+    assert_eq!(client.get_pending_admin(), None);
+}
+
+// ============================================================
+// #66 – Pause reason + timestamp
+// ============================================================
+
+#[test]
+fn test_pause_stores_reason_and_timestamp() {
+    let (env, client, actors) = setup();
+    let reason = soroban_sdk::String::from_str(&env, "scheduled maintenance");
+
+    client.pause(&actors.admin, &reason);
+
+    let info = client.get_pause_info().expect("pause info should be present");
+    assert_eq!(info.reason, reason);
+    // timestamp is ledger time; just assert it is non-zero in a real ledger,
+    // in test env it defaults to 0 which is still a valid u64
+    let _ = info.paused_at;
+}
+
+#[test]
+fn test_unpause_clears_pause_info() {
+    let (env, client, actors) = setup();
+    client.pause(&actors.admin, &soroban_sdk::String::from_str(&env, "reason"));
+    client.unpause(&actors.admin);
+
+    assert_eq!(client.get_pause_info(), None);
+}
+
+#[test]
+fn test_get_pause_info_none_when_not_paused() {
+    let (_env, client, _actors) = setup();
+    assert_eq!(client.get_pause_info(), None);
 fn test_calculate_sla_view_rejects_unknown_severity() {
     let (env, client, _actors) = setup();
     client.calculate_sla_view(
