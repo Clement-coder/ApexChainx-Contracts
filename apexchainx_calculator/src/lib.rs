@@ -61,6 +61,7 @@ const RETENTION_LIMIT_KEY: Symbol = symbol_short!("RETLIM"); // SC-013: configur
 // Additive fields are not considered breaking.
 // -----------------------------------------------------------------------
 const EVENT_SLA_CALC: Symbol = symbol_short!("sla_calc");
+const EVENT_SETTLE_INTENT: Symbol = symbol_short!("set_int");
 const EVENT_CONFIG_UPD: Symbol = symbol_short!("cfg_upd");
 const EVENT_PAUSED: Symbol = symbol_short!("paused"); // #27
 const EVENT_UNPAUSED: Symbol = symbol_short!("unpause"); // #27
@@ -860,7 +861,8 @@ impl SLACalculatorContract {
             Self::increment_stats(&env, true, result.amount, 0);
         }
 
-        Self::publish_sla_event(&env, severity, &result);
+        Self::publish_sla_event(&env, severity.clone(), &result);
+        Self::publish_settlement_intent_event(&env, severity, &result);
 
         Ok(result)
     }
@@ -887,13 +889,17 @@ impl SLACalculatorContract {
         if mttr_minutes > threshold {
             let overtime = (mttr_minutes - threshold) as i128;
             let penalty = overtime.saturating_mul(cfg.penalty_per_minute);
+            let amount = -penalty;
+            if amount >= 0 {
+                panic!("invalid penalty amount");
+            }
 
             SLAResult {
                 outage_id,
                 status: symbol_short!("viol"),
                 mttr_minutes,
                 threshold_minutes: threshold,
-                amount: -penalty,
+                amount,
                 payment_type: symbol_short!("pen"),
                 rating: symbol_short!("poor"),
                 config_version_hash,
@@ -919,6 +925,9 @@ impl SLACalculatorContract {
                 .reward_base
                 .saturating_mul(multiplier as i128)
                 .div_euclid(100);
+            if reward <= 0 {
+                panic!("invalid reward amount");
+            }
 
             SLAResult {
                 outage_id,
@@ -1170,6 +1179,20 @@ impl SLACalculatorContract {
                 result.mttr_minutes,
                 result.threshold_minutes,
                 result.amount,
+            ),
+        );
+    }
+
+    fn publish_settlement_intent_event(env: &Env, severity: Symbol, result: &SLAResult) {
+        env.events().publish(
+            (EVENT_SETTLE_INTENT, EVENT_VERSION, severity),
+            (
+                result.outage_id.clone(),
+                result.status.clone(),
+                result.payment_type.clone(),
+                result.amount,
+                result.config_version_hash,
+                result.recorded_at,
             ),
         );
     }
