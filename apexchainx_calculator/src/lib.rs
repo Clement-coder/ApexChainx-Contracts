@@ -96,8 +96,9 @@ pub enum SLAError {
     InvalidReward = 10,            // #70
     InvalidSeverity = 11,          // #70
     RetentionLimitOutOfRange = 12, // SC-013
-    MalformedSymbolInput = 13,       // SC-W5-048
-    InvalidOutageId = 14,            // SC-W5-048
+    DuplicateOutageInput = 13,       // SC-W5-046
+    InvalidPenaltyAmount = 14,       // SC-W5-046
+    InvalidRewardAmount = 15,         // SC-W5-046
 }
 
 // -----------------------------------------------------------------------
@@ -199,6 +200,36 @@ pub struct StorageVersionInfo {
     pub expected_version: u32,
     /// True when stored_version != expected_version (migration required).
     pub needs_migration: bool,
+}
+
+/// SC-W5-046 – Typed failure code mapping entry for backend bridge consumption.
+///
+/// Each `FailureCode` maps a numeric error code to a machine-readable Symbol
+/// label and a short human-readable description. Backends call
+/// `get_failure_schema` to obtain the full catalogue at startup.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FailureCode {
+    /// The numeric error code matching the SLAError discriminant.
+    pub code: u32,
+    /// A machine-readable Symbol label (e.g. "AlreadyInitialized").
+    pub label: Symbol,
+    /// A short description of the failure condition.
+    pub description: Symbol,
+}
+
+/// SC-W5-046 – Full catalogue of typed failure codes for backend bridge.
+///
+/// Backend consumers can call `get_failure_schema` once at startup to
+/// pre-load all possible failure codes the contract may return. The schema
+/// is versioned to allow backwards-compatible additions.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FailureSchema {
+    /// Schema version for the failure code catalogue.
+    pub version: Symbol,
+    /// All known failure codes in ascending order.
+    pub codes: Vec<FailureCode>,
 }
 
 /// SC-W5-029 – Combined version negotiation response for backend startup handshake.
@@ -665,50 +696,54 @@ impl SLACalculatorContract {
     pub fn get_config_version_hash(env: Env) -> Result<u64, SLAError> {
         Self::check_version(&env)?;
         Self::compute_config_version_hash(&env)
-        let severities = Self::canonical_severities(&env);
+    }
 
-        // Polynomial rolling hash parameters for good collision resistance
-        const BASE: u64 = 91138233; // Large prime number
-        const MODULUS: u64 = (1u64 << 63) - 25; // Large prime (Mersenne-like)
+    /// SC-W5-046 – Returns the full catalogue of typed failure codes.
+    ///
+    /// Backend bridge consumers call this once at startup to pre-load all
+    /// contract error codes and their human-readable labels. The schema is
+    /// versioned ("v1") so backends can detect additions across upgrades.
+    /// SC-W5-046 – Returns the full catalogue of typed failure codes.
+    ///
+    /// Backend bridge consumers call this once at startup to pre-load all
+    /// contract error codes and their human-readable labels. The schema is
+    /// versioned ("v1") so backends can detect additions across upgrades.
+    pub fn get_failure_schema(env: Env) -> Result<FailureSchema, SLAError> {
+        Self::check_version(&env)?;
+        let mut codes = Vec::new(&env);
 
-        let mut hash: u64 = 1; // Start with non-zero seed
-        let mut power: u64 = 1;
+        // Emit in numeric order for deterministic consumption
+        // All descriptions must be <= 32 bytes (Soroban Symbol constraint)
+        let entries: [(u32, &str, &str); 15] = [
+            (1, "AlreadyInitialized", "Contract already initialized"),
+            (2, "NotInitialized", "Contract not yet initialized"),
+            (3, "Unauthorized", "Caller lacks required role"),
+            (4, "ConfigNotFound", "No config for severity"),
+            (5, "VersionMismatch", "Storage version mismatch"),
+            (6, "ContractPaused", "Contract is paused"),
+            (7, "NoPendingTransfer", "No pending transfer"),
+            (8, "InvalidThreshold", "Threshold out of range"),
+            (9, "InvalidPenalty", "Penalty out of range"),
+            (10, "InvalidReward", "Reward out of range"),
+            (11, "InvalidSeverity", "Severity not supported"),
+            (12, "RetentionLimitOutOfRange", "Retention limit out of range"),
+            (13, "DuplicateOutageInput", "Duplicate outage input"),
+            (14, "InvalidPenaltyAmount", "Invalid penalty amount"),
+            (15, "InvalidRewardAmount", "Invalid reward amount"),
+        ];
 
-        for sev in severities {
-            let cfg = Self::load_config(&env, &sev)?;
-
-            // Mix each field with position-dependent weights
-            let field_hash = hash
-                .wrapping_mul(BASE)
-                .wrapping_add(cfg.threshold_minutes as u64)
-                .wrapping_mul(power)
-                % MODULUS;
-
-            hash = field_hash;
-            power = power.wrapping_mul(BASE) % MODULUS;
-
-            // Add penalty_per_minute with different weight
-            hash = hash
-                .wrapping_mul(BASE)
-                .wrapping_add(cfg.penalty_per_minute as u64)
-                .wrapping_mul(power)
-                % MODULUS;
-
-            power = power.wrapping_mul(BASE) % MODULUS;
-
-            // Add reward_base with different weight
-            hash = hash
-                .wrapping_mul(BASE)
-                .wrapping_add(cfg.reward_base as u64)
-                .wrapping_mul(power)
-                % MODULUS;
-
-            power = power.wrapping_mul(BASE) % MODULUS;
+        for (code, label, description) in entries {
+            codes.push_back(FailureCode {
+                code,
+                label: Symbol::new(&env, label),
+                description: Symbol::new(&env, description),
+            });
         }
 
-        // Final mixing to improve distribution
-        hash = hash.wrapping_mul(BASE).wrapping_add(0x9e3779b97f4a7c15u64) % MODULUS;
-        Ok(hash)
+        Ok(FailureSchema {
+            version: symbol_short!("v1"),
+            codes,
+        })
     }
 
     pub fn get_result_schema(env: Env) -> Result<SLAResultSchema, SLAError> {
@@ -739,6 +774,7 @@ impl SLACalculatorContract {
         features.push_back(symbol_short!("pause"));
         features.push_back(symbol_short!("stats"));
         features.push_back(symbol_short!("history"));
+        features.push_back(symbol_short!("failcode"));
 
         Ok(ContractMetadata {
             contract_name: symbol_short!("sla_calc"),
