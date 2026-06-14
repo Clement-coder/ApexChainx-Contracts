@@ -202,41 +202,53 @@ Must exactly match backend logic.
 
 ---
 
-## Known Risk Areas (Generate Issues)
+## Risk Assessment
 
-### SLA Logic
+### Risk Matrix
 
-- mismatch between backend and contract
-- incorrect rounding or integer precision
-- edge cases (boundary MTTR values)
-
-### Payments
-
-- double execution risk
-- missing authorization checks
-- incorrect recipient addresses
-
-### Security
-
-- admin privilege misuse
-- contract initialization errors
-- unauthorized config updates
-
-### Gas Optimization
-
-- unnecessary storage writes
-- inefficient loops
-- repeated computation
+| Category | Risk | Severity | Mitigation |
+|----------|------|----------|------------|
+| **SLA Logic** | Backend-contract mismatch | High | Golden test vectors, parity CI checks |
+| **SLA Logic** | Integer precision errors | Medium | Use only integer math, test boundary conditions |
+| **SLA Logic** | Edge cases (boundary MTTR) | Medium | Comprehensive boundary test suite |
+| **Payments** | Double execution | High | Idempotency keys, outage_id deduplication |
+| **Payments** | Missing authorization | Critical | require_auth() on all privileged functions |
+| **Payments** | Wrong recipient | High | Address validation, two-step confirmation |
+| **Security** | Admin privilege misuse | Critical | Two-step transfers, audit events, renounce safety |
+| **Security** | Initialization errors | High | One-time init guard, verify-after-init |
+| **Security** | Unauthorized config changes | High | Role-based access control, event emission |
+| **Gas** | Unnecessary storage writes | Medium | Use view functions for reads, batch writes |
+| **Gas** | Inefficient loops | Medium | Bound data structures, paginate history |
+| **Gas** | Repeated computation | Low | Cache results where possible |
 
 ---
 
-## Coding Rules
+## Coding Standards
 
-- use integer math only
-- avoid unnecessary state writes
-- validate all inputs
-- emit events for important actions
-- keep functions small and testable
+### Mandatory Rules
+
+| Rule | Rationale |
+|------|-----------|
+| Integer math only | Floating point is non-deterministic and gas-expensive |
+| Validate all inputs | Prevent invalid state transitions |
+| Emit events for state changes | Enable backend audit and replay |
+| Keep functions small | Improve auditability and testability |
+| Avoid unnecessary state writes | Minimize gas costs |
+| Use require_auth() for privileged ops | Enforce role-based access control |
+
+### Code Organization
+
+```
+contract_name/
+├── Cargo.toml
+└── src/
+    ├── lib.rs           # Contract entry point, storage keys, error types
+    ├── tests.rs         # Integration tests
+    ├── version_negotiation.rs  # Multi-contract versioning
+    ├── storage_version.rs      # Schema versioning
+    ├── event_schema.rs         # Canonical event definitions
+    └── ...              # Additional domain modules
+```
 
 ---
 
