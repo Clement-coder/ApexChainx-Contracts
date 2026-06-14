@@ -45,38 +45,48 @@ The ApexChainx platform is composed of three repositories:
 ## SC-100: Future Contract Roadmap
 
 This section documents the planned evolution of `apexchainx-contracts` based on
-current backend integration needs. It distinguishes what exists today from what
-is planned, so contributors do not assume missing crates are already present.
+current backend integration needs and business requirements.
+
+### Versioning Strategy
+
+| Version | Scope | Timeline |
+|---------|-------|----------|
+| v1.0 | Single crate (`apexchainx_calculator`) | ✅ Current |
+| v1.1 | Multi-contract version negotiation | ✅ Current |
+| v2.0 | Payment escrow integration | Planned |
+| v2.1 | Multi-party settlement | Planned |
+| v3.0 | On-chain governance with timelocks | Planned |
 
 ### Current State
 
 Only one contract crate exists in this repository:
 
-| Crate | Status | Description |
-|---|---|---|
-| `apexchainx_calculator` | **Production-ready** | Calculates SLA penalties and rewards; stores config; emits versioned events |
+| Crate | Status | Description | Key Features |
+|-------|--------|-------------|--------------|
+| `apexchainx_calculator` | **Production-ready** | SLA calculator contract | Config management, role-based auth, event emission, version negotiation, result schema |
 
 ### Planned Additions
 
 The following crates are planned but **not yet implemented**. Do not import or
 reference them until they appear in the repository.
 
-| Crate | Status | Depends on | Description |
-|---|---|---|---|
+| Crate | Status | Depends On | Description |
+|-------|--------|------------|-------------|
 | `payment_escrow` | Planned | `apexchainx_calculator` | Locks and conditionally releases Stellar token payments based on SLA results |
 | `settlement` | Planned | `payment_escrow` | Splits shared outage costs between multiple parties |
 | `governance` | Planned | — | On-chain admin config changes with time-locked execution |
 
 ### Integration Expectations
 
-- The backend (`apexchainx-be`) currently integrates only with `apexchainx_calculator`.
-- New crates will be introduced incrementally; each must expose a
-  `get_result_schema()` equivalent so the backend can version-pin safely.
-- Frontend never calls contracts directly — all invocations go through the backend.
+- The backend (`apexchainx-be`) currently integrates only with `apexchainx_calculator`
+- New crates will be introduced incrementally
+- Each new crate must expose a `get_result_schema()` equivalent for safe version pinning
+- Frontend never calls contracts directly — all invocations go through the backend
 
 ### Contribution Guidelines for New Crates
 
-1. Open a tracking issue before creating the crate directory.
-2. Follow the `apexchainx_calculator` layout: `src/lib.rs`, `src/tests.rs`, `Cargo.toml`.
-3. Add the new crate to any CI matrix in `.github/workflows/`.
-4. Export a result schema function so the backend can detect breaking changes.
+1. **Open a tracking issue** before creating the crate directory
+2. **Follow the established layout**: `src/lib.rs`, `src/tests.rs`, `Cargo.toml`
+3. **Add to CI matrix** in `.github/workflows/`
+4. **Export a result schema** function so the backend can detect breaking changes
+5. **Include version negotiation** support for multi-contract compatibility
