@@ -1,3 +1,24 @@
+//! Severity level enumeration and validation utilities.
+//!
+//! The SLA calculator supports exactly four severity levels with a strict
+//! canonical ordering: critical > high > medium > low. This ordering is
+//! used for config snapshot generation, validation, and backend-facing
+//! deterministic reads.
+//!
+//! # Severity Properties
+//!
+//! | Level | Priority | Default Threshold | Max Threshold |
+//! |-------|----------|------------------|--------------|
+//! | critical | Highest | 15 min | 60 min |
+//! | high | High | 30 min | 120 min |
+//! | medium | Standard | 60 min | 240 min |
+//! | low | Low | 120 min | 1440 min |
+//!
+//! # Determinism
+//!
+//! The `supported_severities()` function returns severities in a fixed order
+//! to guarantee deterministic iteration across all consumers.
+
 use soroban_sdk::{symbol_short, Env, Symbol, Vec};
 
 pub fn supported_severities(env: &Env) -> Vec<Symbol> {
