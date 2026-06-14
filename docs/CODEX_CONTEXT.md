@@ -336,51 +336,48 @@ Current SLA calculation event payload:
 
 ---
 
-## SC-097: Event Replay and Recovery Guidance
+## SC-097: Event Replay & Recovery Guidance
 
-### Intended Event Consumption
+### Event Consumption Model
 
 Backend consumers should treat the SLA calculator's on-chain events as a
-supplementary audit trail, not as the primary source of truth for SLA outcomes.
-The canonical state is always the most recent `calculate_sla` result stored
+**supplementary audit trail**, not as the primary source of truth. The
+canonical state is always the most recent `calculate_sla` result stored
 on-chain and retrieved via direct contract reads.
 
 ### Event Replay Assumptions
 
-- Events are emitted with a versioned topic layout (`v1`). Consumers must check
-  `topic[1]` before deserialising the payload to avoid version mismatches.
-- Events are not guaranteed to be present for every ledger (e.g. archival or
-  network gaps). Consumers must handle missing events gracefully.
-- Re-processing the same event twice must be idempotent on the backend — use the
-  `outage_id` field as a deduplication key.
+| Assumption | Implication |
+|------------|-------------|
+| Versioned topics | Check `topic[1]` before deserialising to avoid version mismatches |
+| Non-guaranteed presence | Events may not exist for every ledger — handle gaps gracefully |
+| Idempotent replay | Use `outage_id` as deduplication key for re-processing |
 
-### Missed-Event Recovery
+### Missed-Event Recovery Procedure
 
-1. Detect a gap by comparing the last processed ledger sequence against the
-   current ledger sequence from `getLatestLedger`.
-2. Use `getEvents` with an explicit `startLedger` to replay missed events in
-   chronological order.
-3. Cross-check replayed results against `calculate_sla_view` for the same
-   `outage_id` to validate consistency.
-4. Log any discrepancy between the event payload and the on-chain state as a
-   potential double-execution risk.
+1. **Detect gap** — Compare last processed ledger sequence against current `getLatestLedger`
+2. **Replay** — Use `getEvents` with explicit `startLedger` to fetch missed events in order
+3. **Cross-check** — Verify replayed results against `calculate_sla_view` for the same `outage_id`
+4. **Alert** — Log any discrepancy between event payload and on-chain state as potential double-execution risk
 
 ### Canonical State vs Event-Stream Interpretation
 
-| Operation | Recommended source |
-|---|---|
-| Current SLA result for an outage | Direct contract read (`calculate_sla_view`) |
-| Audit / history of all outages | Event stream replay |
-| Config at a point in time | `cfg_upd` events + `get_config` |
-| Payment amounts | Event payload `amount` field (signed integer) |
+| Operation | Recommended Source | Reasoning |
+|-----------|-------------------|-----------|
+| Current SLA result | `calculate_sla_view` | Most recent on-chain state |
+| Historical audit | Event stream replay | Chronological event log |
+| Config at point-in-time | `cfg_upd` events + `get_config` | Config change events + current state |
+| Payment amounts | Event payload `amount` field | Signed integer in event |
 
 ---
 
-## Goal for Codex
+## Documentation Goals
 
-Generate issues that:
+This document serves as a technical reference for:
 
-- improve contract correctness
-- ensure security of payments
-- optimize gas usage
-- guarantee deterministic behavior
+| Goal | Audience |
+|------|----------|
+| Improve contract correctness | Developers, auditors |
+| Ensure payment security | Backend operators, security reviewers |
+| Optimize gas usage | Contract developers |
+| Guarantee deterministic behavior | QA engineers, backend integrators |
