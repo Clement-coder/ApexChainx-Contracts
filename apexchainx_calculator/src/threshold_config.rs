@@ -1,3 +1,18 @@
+//! SLA threshold boundary condition tests.
+//!
+//! This module tests edge cases around threshold configuration and SLA
+//! calculation results. It verifies that extreme threshold values (zero,
+//! near-zero) produce correct SLA outcomes.
+//!
+//! # Test Scenarios
+//!
+//! - `test_zero_threshold_always_violated`: A threshold of 0 minutes means
+//!   any positive MTTR is a violation. This tests the boundary condition
+//!   where even 1 minute of repair time exceeds the threshold.
+//! - `test_near_zero_threshold_one_minute`: A 1-minute threshold creates a
+//!   razor-thin boundary where MTTR of 1 minute meets the SLA but MTTR of
+//!   2 minutes violates it.
+
 #[cfg(test)]
 mod threshold_tests {
     use soroban_sdk::{symbol_short, testutils::Address as _, Address, Env};
