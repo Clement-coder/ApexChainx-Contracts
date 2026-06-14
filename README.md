@@ -290,53 +290,70 @@ The `release-hash` workflow (`.github/workflows/release-hash.yml`) runs
 automatically on every push to `main`, every PR, and every `v*` tag. On tag
 pushes the manifest and WASM are attached to the GitHub Release.
 
-## Verification Notes
+## Build Verification
 
-As of the latest stabilization pass:
+### Current Status
 
-- `cargo test` passes
-- the crate compiles cleanly
-- the checked-in test suite is wired into the crate and runs
+| Check | Status |
+|-------|--------|
+| `cargo test` | ✅ Passing |
+| Crate compilation | ✅ Clean |
+| Test suite bindings | ✅ Wired and functional |
 
 ### no-std Compliance
 
-Soroban contracts run inside a WASM sandbox that has no operating system and no
-Rust standard library.  The crate is declared `#![no_std]` to enforce this at
-the source level, but `cargo test` on the host re-enables `std` via the test
+Soroban contracts execute inside a WASM sandbox with no operating system and no
+Rust standard library. The crate is declared `#![no_std]` to enforce this at
+the source level. However, `cargo test` on the host re-enables `std` via the test
 harness — so a stray `use std::vec::Vec` or `println!` would compile fine in
 tests yet fail at deployment.
 
-The CI pipeline therefore includes a dedicated **no-std compliance check**:
+#### Compliance Check
+
+The CI pipeline includes a dedicated **no-std compliance check**:
 
 ```bash
 cargo check --target wasm32-unknown-unknown --lib
 ```
 
 This compiles only the library crate (not the test harness) for the
-`wasm32-unknown-unknown` target, which has no `std`.  Any accidental `std`
-import surfaces as a compile error here before it can reach a deployed contract.
-The step runs after the host tests so regressions are caught in the same PR that
-introduces them.
+`wasm32-unknown-unknown` target (no `std`). Any accidental `std` import
+surfaces as a compile error before it can reach a deployed contract.
 
-The current test suite covers:
+### Test Coverage
 
-- role and authorization behavior
-- SLA reward and penalty logic
-- pause and unpause behavior
-- statistics
-- audit-mode calculation parity
-- history recording and pruning
+The current test suite covers the following domains:
 
-## Backend Relationship
+| Domain | Description |
+|--------|-------------|
+| Authorization | Role-based access control, admin/operator permissions |
+| SLA Logic | Reward and penalty calculation with boundary conditions |
+| Pause/Unpause | Contract lifecycle management |
+| Statistics | Cumulative tracking of SLA calculations |
+| Audit Parity | Read-only calculation mode matches mutating mode |
+| History | Event recording, retrieval, and pruning operations |
 
-The backend repo is expected to invoke this contract and translate contract results into backend API responses.
+## Backend Integration
 
-That dependency matters because:
+The backend repository (`apexchainx-be`) invokes this contract and translates
+contract results into backend API responses. This relationship imposes several
+critical constraints.
 
-- SLA logic must stay aligned with backend expectations
-- result encoding must remain deterministic
-- API consumers in `apexchainx-fe` only see what `apexchainx-be` returns
-- config reads should prefer explicit snapshot-style contract views where stable ordering matters
+### Integration Contract
+
+| Requirement | Rationale |
+|-------------|----------|
+| SLA logic alignment | Contract and backend must produce identical results for identical inputs |
+| Deterministic encoding | Result encoding must be stable across invocations |
+| Single source of truth | API consumers see only what the backend returns |
+| Snapshot-style reads | Config reads should prefer explicit snapshot views for stable ordering |
+
+### Backend Dependencies
+
+- Match `calculate_sla_view()` exactly with local business logic
+- Consume `test_snapshots/tests/*.json` as golden vectors
+- Monitor git tags (`vX.Y.Z`) for contract releases
+- Use `get_config_snapshot()` + `get_result_schema()` for schema validation
 
 ## Current Limitations
 
