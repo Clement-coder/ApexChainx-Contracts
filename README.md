@@ -340,48 +340,73 @@ That dependency matters because:
 
 ## Current Limitations
 
-This repository is now stable at the crate level, but the overall contract layer is still narrow.
+This repository is stable at the crate level but the overall contract layer is still narrow:
 
-Examples:
+- Only one contract crate exists (`apexchainx_calculator`)
+- No deployment automation checked in
+- No broader contract workspace with escrow or settlement modules
+- Cross-repo contract invocation is handled by the backend
 
-- only one contract crate exists right now
-- deployment automation is not checked in
-- there is not yet a broader contract workspace with escrow or settlement modules
-- cross-repo contract invocation is still a backend integration concern, not something managed here directly
+## Governance Model
 
-## Governance Policy
+The contract implements a role-based governance model with two-step transfers for
+security and an irreversible renounce mechanism.
 
-### Admin transfer (two-step)
+### Role Architecture
+
+| Role | Authority | Set By |
+|------|-----------|--------|
+| **Admin** | Config updates, governance, pause, prune | `initialize()` |
+| **Operator** | SLA calculation execution | Admin |
+
+### Admin Transfer (Two-Step)
 
 Admin authority is transferred via a two-step flow to prevent accidental reassignment:
 
-1. Current admin calls `propose_admin(caller, new_admin)` — stores a pending proposal.
-2. Proposed admin calls `accept_admin(caller)` — atomically promotes caller to admin and clears the proposal.
+1. **Propose:** Current admin calls `propose_admin(caller, new_admin)` — stores a pending proposal
+2. **Accept:** Proposed admin calls `accept_admin(caller)` — atomically promotes caller to admin
 
-The old admin retains authority until `accept_admin` succeeds. `get_pending_admin()` is queryable at any time.
+The old admin retains authority until `accept_admin` succeeds. `get_pending_admin()`
+is queryable at any time.
 
-To cancel a stale or mistaken proposal before it is accepted, the current admin calls `cancel_admin_proposal(caller)`. This clears the pending proposal without changing the active admin. The call returns an error if no proposal is pending. After cancellation the admin may issue a fresh `propose_admin` for a different address.
+**Cancellation:** To cancel a stale or mistaken proposal, the current admin calls
+`cancel_admin_proposal(caller)`. This clears the pending proposal without changing
+the active admin. A fresh proposal can be issued immediately.
 
-### Operator handoff (two-step)
+### Operator Handoff (Two-Step)
 
 Operator rotation follows the same pattern:
 
-1. Admin calls `propose_operator(caller, new_operator)`.
-2. New operator calls `accept_operator(caller)` to activate.
+1. **Propose:** Admin calls `propose_operator(caller, new_operator)`
+2. **Accept:** New operator calls `accept_operator(caller)` to activate
 
 `get_pending_operator()` exposes the pending state for governance visibility.
 
-To cancel a pending operator proposal, the admin calls `cancel_operator_proposal(caller)`. The active operator is unchanged. A fresh `propose_operator` may be issued immediately after cancellation.
+**Cancellation:** `cancel_operator_proposal(caller)` clears a pending operator
+proposal. The active operator is unchanged.
 
-### Admin renounce
+### Admin Renounce
 
-`renounce_admin(caller)` permanently removes admin authority. This is **irreversible**: after renounce, all admin-gated functions (`set_config`, `pause`, `unpause`, `set_operator`, `prune_history`) are permanently locked. Any pending admin proposal is also cleared atomically.
+`renounce_admin(caller)` permanently removes admin authority. This operation is
+**irreversible**:
 
-Backend operators should treat a renounced contract as immutable from a governance perspective. There is no recovery path by design — if recovery is needed, redeploy and reinitialize.
+- All admin-gated functions (`set_config`, `pause`, `unpause`, `set_operator`, `prune_history`) are permanently locked
+- Any pending admin proposal is cleared atomically
+- No recovery path exists by design
 
-### Pause metadata
+> **⚠️ Warning:** A renounced contract should be treated as immutable. If recovery
+> is needed, redeploy and reinitialize the contract.
 
-`pause(caller, reason)` stores a `PauseInfo` struct containing the reason string and the ledger timestamp at pause time. `get_pause_info()` returns this metadata while the contract is paused. `unpause` clears it. This gives backend operators operational context without requiring off-chain state.
+### Pause Metadata
+
+`pause(caller, reason)` stores a `PauseInfo` struct containing:
+
+- `reason`: Human-readable explanation string
+- Timestamp: Ledger timestamp at pause time
+
+`get_pause_info()` returns this metadata while the contract is paused.
+`unpause()` clears it. This gives backend operators operational context without
+requiring off-chain state tracking.
 
 ## Related Repositories
 
