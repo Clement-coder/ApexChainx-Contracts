@@ -46,41 +46,70 @@ jobs:
           components: rustfmt, clippy
           targets: wasm32-unknown-unknown
 
+      # --------------------------------------------------------------------
+      # Dependency Caching
+      # --------------------------------------------------------------------
+      # Speeds up subsequent runs by caching compiled dependencies.
+      # Cache key is automatically derived from Cargo.lock.
       - name: Cache Cargo dependencies
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: apexchainx_calculator
 
-      - name: Check formatting
+      # --------------------------------------------------------------------
+      # Step 1: Code Formatting
+      # --------------------------------------------------------------------
+      # Enforces consistent code style via rustfmt. Fails if any file
+      # deviates from the configured formatting rules.
+      - name: Check Rust formatting
         run: cargo fmt --manifest-path apexchainx_calculator/Cargo.toml -- --check
 
-      - name: Clippy (no-std compatible)
+      # --------------------------------------------------------------------
+      # Step 2: Static Analysis
+      # --------------------------------------------------------------------
+      # Runs Clippy with -D warnings (deny-level). Any lint warning
+      # will fail the build. This ensures no warnings are introduced.
+      - name: Clippy static analysis
         run: cargo clippy --manifest-path apexchainx_calculator/Cargo.toml -- -D warnings
 
-      - name: Run tests
+      # --------------------------------------------------------------------
+      # Step 3: Test Suite
+      # --------------------------------------------------------------------
+      # Executes the full test suite including unit tests, integration
+      # tests, and golden vector snapshot generation.
+      - name: Run test suite
         run: cargo test --manifest-path apexchainx_calculator/Cargo.toml
 
-      # SC-077 — verify the crate compiles for the wasm32 target
-      - name: Build wasm32 target
+      # --------------------------------------------------------------------
+      # Step 4: WASM Build (SC-077)
+      # --------------------------------------------------------------------
+      # Verifies the crate compiles for wasm32-unknown-unknown target,
+      # which is required for Soroban contract deployment on Stellar.
+      - name: Build release WASM
         run: cargo build --release --manifest-path apexchainx_calculator/Cargo.toml --target wasm32-unknown-unknown
 
-      # SC-044 — explicit no-std check: compile the library crate (not tests) for
-      # wasm32-unknown-unknown, which has no std.  This catches accidental std
-      # imports (e.g. std::vec, std::string, println!) that cargo test on the host
-      # would silently accept because the test harness re-enables std.
-      # The wasm32 target has no OS and no std by default, so any std usage that
-      # slips past #![no_std] will surface here as a compile error before it ever
-      # reaches a deployed contract.
-      - name: no-std compliance check (wasm32)
+      # --------------------------------------------------------------------
+      # Step 5: no-std Compliance Check (SC-044)
+      # --------------------------------------------------------------------
+      # Soroban contracts run in a WASM sandbox with no standard library.
+      # This check compiles only the library crate (not tests) for
+      # wasm32-unknown-unknown, which has no std.  Catches accidental
+      # std imports (e.g. std::vec, std::string, println!) that would
+      # compile fine in tests yet fail at deployment.
+      - name: no-std compliance check
         run: cargo check --manifest-path apexchainx_calculator/Cargo.toml --target wasm32-unknown-unknown --lib
 
-      # SC-078 — surface contract size after release build
+      # --------------------------------------------------------------------
+      # Step 6: Binary Size Check (SC-078)
+      # --------------------------------------------------------------------
+      # Enforces a 100 KB soft limit on the release WASM binary.
+      # Exceeding this limit produces a CI warning for review.
       - name: Check contract binary size
         run: |
           WASM=apexchainx_calculator/target/wasm32-unknown-unknown/release/apexchainx_calculator.wasm
           SIZE=$(wc -c < "$WASM")
           echo "Contract size: ${SIZE} bytes"
-          MAX=102400   # 100 KB soft limit
+          MAX=102400   # 100 KB soft limit (SC-078)
           if [ "$SIZE" -gt "$MAX" ]; then
             echo "::warning::Contract binary (${SIZE}B) exceeds soft limit of ${MAX}B"
           fi
