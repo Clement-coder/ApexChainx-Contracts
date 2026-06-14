@@ -1,8 +1,8 @@
 # Changelog
 
-All interface-affecting changes to `apexchainx-contracts` are recorded here.
-
-The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
+> All interface-affecting changes to `apexchainx-contracts` are recorded here.
+> This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
+> and follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) conventions.
 
 ---
 
@@ -54,9 +54,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Changelog Process
 
-When making an interface-affecting change:
+When making an interface-affecting change, follow these steps:
 
-1. Add an entry under `[Unreleased]` in the appropriate section (`Added`, `Changed`, `Removed`, `Fixed`)
-2. Use the exact function name as it appears in the contract
-3. Mark breaking changes explicitly with **(breaking)**
-4. On release, rename `[Unreleased]` to the version tag and date, then open a new `[Unreleased]` block
+1. **Add an entry** under `[Unreleased]` in the appropriate section (`Added`, `Changed`, `Removed`, `Fixed`)
+2. **Use exact function names** as they appear in the contract interface
+3. **Mark breaking changes** explicitly with **(breaking)**
+4. **On release**, rename `[Unreleased]` to the version tag and date, then open a fresh `[Unreleased]` block
+
+### Change Categories
+
+| Category | Usage |
+|----------|-------|
+| `Added` | New functions, features, or parameters |
+| `Changed` | Modifications to existing behavior (non-breaking) |
+| `Fixed` | Bug fixes or corrections |
+| `Removed` | Deprecated or deleted functionality |
+| `Security` | Vulnerability patches or security improvements |
