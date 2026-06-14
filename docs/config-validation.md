@@ -104,36 +104,74 @@ Input Parameters
 
 ## Default Configuration Values
 
-The contract initializes with these validated defaults:
+The contract initializes with the following validated defaults:
 
-| Severity | Threshold | Penalty/Min | Reward Base |
-|----------|-----------|-------------|-------------|
-| critical | 15 min | 100 | 750 |
-| high | 30 min | 50 | 750 |
-| medium | 60 min | 25 | 750 |
-| low | 120 min | 10 | 600 |
+| Severity | Threshold (min) | Penalty/Min (units) | Reward Base (units) | Annual Impact Estimate |
+|----------|----------------|---------------------|--------------------|----------------------|
+| `critical` | 15 | 100 | 750 | ~$270,000 |
+| `high` | 30 | 50 | 750 | ~$135,000 |
+| `medium` | 60 | 25 | 750 | ~$67,500 |
+| `low` | 120 | 10 | 600 | ~$27,000 |
+
+> **Note:** Annual impact assumes consistent incident rates and is for
+> illustration only. Actual impact depends on incident frequency and duration.
 
 ## Best Practices for Backend Operators
 
-### 1. Gradual Changes
+### 1. Gradual Configuration Changes
+
+```
+❌ Bad:  threshold_minutes: 30 → 5 (drastic jump)
+✅ Good: threshold_minutes: 30 → 25 → 20 → 15 (incremental)
+```
+
 - Make incremental changes rather than drastic jumps
 - Test new configurations in a staging environment first
+- Use `calculate_sla_view` to preview the impact of changes
 
 ### 2. Severity Consistency
-- Maintain logical progression between severities
-- Higher severities should generally have lower thresholds and higher penalties
+
+| Rule | Rationale |
+|------|-----------|
+| Maintain logical severity progression | Higher severity → lower threshold, higher penalty |
+| Avoid inversion | Critical should always be stricter than high |
+| Proportional scaling | Penalty ratios should reflect severity tiers |
 
 ### 3. Economic Considerations
+
 - Consider the total economic impact of penalties and rewards
-- Ensure penalty structures incentivize desired behavior
+- Ensure penalty structures incentivize the desired behavior
+- Balance rewards against operational costs
+- Audit economic impact quarterly based on incident data
 
 ### 4. Monitoring
-- Monitor SLA calculation results after configuration changes
-- Watch for unexpected patterns in violations or rewards
 
-### 5. Validation Testing
-- Use the `calculate_sla_view` function to test configurations before applying
-- Verify edge cases (threshold boundaries) work as expected
+- Monitor SLA calculation results after configuration changes
+- Watch for unexpected patterns in violation rates
+- Track reward-to-penalty ratios over time
+- Set up alerts for anomalous configuration changes
+
+### 5. Pre-Commit Validation
+
+Use `calculate_sla_view` to test configurations before applying:
+
+```rust
+// Preview the effect of a new threshold
+let result = calculate_sla_view(
+    outage_id,
+    severity::critical,
+    mttr_minutes,  // Try different MTTR values
+);
+// Verify edge cases (threshold boundaries) work as expected
+```
+
+### 6. Change Management Checklist
+
+- [ ] Test new config with `calculate_sla_view`
+- [ ] Verify severity progression is maintained
+- [ ] Check economic impact is within expected bounds
+- [ ] Deploy during low-traffic period
+- [ ] Monitor violation rates for 24h post-change
 
 ## Example Valid Configurations
 
