@@ -16,7 +16,7 @@
 //! The normalization is deterministic: identical history inputs always produce
 //! identical snapshot outputs.
 
-use soroban_sdk::{Vec, Symbol};
+use soroban_sdk::{symbol_short, Vec};
 use crate::SLAResult;
 
 /// Summarised view of SLA calculation history.
@@ -42,10 +42,10 @@ pub fn normalize_history(history: &Vec<SLAResult>) -> NormalizedSnapshot {
 
     for i in 0..history.len() {
         let entry = history.get(i).unwrap();
-        if entry.status == Symbol::new(history.env(), "viol") {
+        if entry.status == symbol_short!("viol") {
             has_violations = true;
         }
-        if entry.payment_type == Symbol::new(history.env(), "rew") {
+        if entry.payment_type == symbol_short!("rew") {
             has_rewards = true;
         }
     }
