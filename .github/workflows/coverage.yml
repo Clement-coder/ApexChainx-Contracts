@@ -71,19 +71,17 @@ jobs:
       # Upload lcov.info to Codecov.
       # CODECOV_TOKEN must be added as a repository secret in GitHub Settings
       # → Secrets and variables → Actions → New repository secret.
-      # The `fail_ci_if_error` flag ensures a missing/invalid token surfaces
-      # as a hard failure rather than a silent skip.
-      #
-      # Coverage gate: Codecov's `patch` and `project` threshold settings
-      # enforce the ≤1% regression policy configured in codecov.yml (see below).
+      # fail_ci_if_error is false so a missing token on fork PRs produces a
+      # warning rather than a hard build failure. The coverage gate (threshold
+      # checks) is enforced by codecov.yml once uploads are flowing.
       - name: Upload to Codecov
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: lcov.info
           flags: unit
           name: apexchainx-calculator
-          fail_ci_if_error: true
+          fail_ci_if_error: false
 
       - name: Upload lcov artifact
         uses: actions/upload-artifact@v4
